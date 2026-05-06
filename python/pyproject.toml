@@ -14,3 +14,20 @@ transcribe-srt = "transcribe:main"
 validate-srt = "validate_srt:main"
 standardize-srt = "standardize_srt:main"
 video-to-srt = "pipeline:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = [
+    "extract_audio",
+    "pipeline",
+    "providers",
+    "srt",
+    "standardize_srt",
+    "transcribe",
+    "transcribe_grok",
+    "transcribe_mistral",
+    "validate_srt",
+]

@@ -688,7 +688,7 @@ wheels = [
 [[package]]
 name = "video-to-srt"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "mistralai" },
     { name = "moviepy" },
