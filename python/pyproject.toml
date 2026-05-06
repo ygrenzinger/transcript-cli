@@ -1,0 +1,16 @@
+[project]
+name = "video-to-srt"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "mistralai>=1.0",
+    "moviepy>=2.0",
+    "requests>=2.33.1",
+]
+
+[project.scripts]
+extract-audio = "extract_audio:main"
+transcribe-srt = "transcribe:main"
+validate-srt = "validate_srt:main"
+standardize-srt = "standardize_srt:main"
+video-to-srt = "pipeline:main"
