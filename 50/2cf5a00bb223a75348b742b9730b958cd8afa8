@@ -1,0 +1,20 @@
+python/pyproject.toml
+  s_a9888a7c6cda4f::t_7e0732808137d7 19-20,22
+  s_a9888a7c6cda4f::t_2e9c6b6f66c307 17-18,21,23-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "502cf5a00bb223a75348b742b9730b958cd8afa8",
+  "prompts": {},
+  "sessions": {
+    "s_a9888a7c6cda4f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_201424b5affeVViPzzpcMqKNeN",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
