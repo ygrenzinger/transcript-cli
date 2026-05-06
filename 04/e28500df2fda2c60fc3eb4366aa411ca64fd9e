@@ -1,0 +1,14 @@
+python/.gitignore
+  h_1a3147ea652b40 1-2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "04e28500df2fda2c60fc3eb4366aa411ca64fd9e",
+  "prompts": {},
+  "humans": {
+    "h_1a3147ea652b40": {
+      "author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
