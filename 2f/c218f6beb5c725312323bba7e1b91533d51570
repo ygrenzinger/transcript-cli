@@ -1,0 +1,12 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "2fc218f6beb5c725312323bba7e1b91533d51570",
+  "prompts": {},
+  "humans": {
+    "h_1a3147ea652b40": {
+      "author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
