@@ -6,7 +6,10 @@ dependencies = [
     "google-genai>=1.0",
     "mistralai>=1.0",
     "moviepy>=2.0",
+    "numpy>=1.26",
     "requests>=2.33.1",
+    "sherpa-onnx-bin>=1.13.0",
+    "sherpa-onnx>=1.12.0",
 ]
 
 [project.scripts]

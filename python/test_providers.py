@@ -1,13 +1,27 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import tarfile
+import tempfile
+import types
 import unittest
+from io import BytesIO, StringIO
 from dataclasses import dataclass
+from pathlib import Path
+from unittest.mock import patch
 
+import providers
 from providers import (
     ProviderError,
+    SHERPA_PARAKEET_MODEL_KEY,
     get_provider,
+    ensure_sherpa_parakeet_model,
     list_providers,
+    sherpa_parakeet_model_is_valid,
+    sherpa_result_to_cues,
+    sherpa_runtime_candidates,
     validate_required_env_vars,
     vertex_gemini_result_to_cues,
 )
@@ -81,6 +95,140 @@ class VertexGeminiProviderTests(unittest.TestCase):
             vertex_gemini_result_to_cues(
                 {"segments": [{"start": 2, "end": 3, "text": "first"}, {"start": 1, "end": 2, "text": "second"}]}
             )
+
+
+class SherpaParakeetProviderTests(unittest.TestCase):
+    def test_sherpa_parakeet_provider_is_registered_and_discoverable(self) -> None:
+        provider = get_provider("sherpa-parakeet")
+        payload = json.loads(list_providers())
+
+        self.assertEqual("sherpa-parakeet", provider.name)
+        self.assertEqual(SHERPA_PARAKEET_MODEL_KEY, provider.default_model)
+        self.assertEqual((), provider.required_env_vars)
+        self.assertEqual(SHERPA_PARAKEET_MODEL_KEY, payload["sherpa-parakeet"]["default_model"])
+        self.assertEqual([SHERPA_PARAKEET_MODEL_KEY], payload["sherpa-parakeet"]["models"])
+
+    def test_sherpa_parakeet_model_cache_reuses_valid_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = Path(tmpdir) / providers.SHERPA_PARAKEET_MODEL_DIRNAME
+            model_dir.mkdir()
+            for filename in providers.SHERPA_PARAKEET_REQUIRED_FILES:
+                (model_dir / filename).write_text("asset", encoding="utf-8")
+
+            result = ensure_sherpa_parakeet_model(get_env={providers.SHERPA_PARAKEET_CACHE_ENV: tmpdir}.get, request_get=self._unexpected_get)
+
+            self.assertEqual(model_dir, result)
+            self.assertTrue(sherpa_parakeet_model_is_valid(result))
+
+    def test_sherpa_parakeet_model_cache_downloads_missing_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            response = FakeResponse(_model_archive_bytes())
+
+            result = ensure_sherpa_parakeet_model(
+                get_env={providers.SHERPA_PARAKEET_CACHE_ENV: tmpdir}.get,
+                request_get=lambda *_args, **_kwargs: response,
+            )
+
+            self.assertTrue(sherpa_parakeet_model_is_valid(result))
+            self.assertTrue(response.iterated)
+
+    def test_sherpa_result_to_cues_parses_token_timestamps(self) -> None:
+        result = types.SimpleNamespace(
+            text="Hello world. Again.",
+            tokens=[" Hello", " world", ".", " Again", "."],
+            timestamps=[0.0, 0.4, 0.8, 1.2, 1.6],
+        )
+
+        cues = sherpa_result_to_cues(result)
+
+        self.assertEqual(2, len(cues))
+        self.assertEqual(0, cues[0].start_ms)
+        self.assertEqual(1200, cues[0].end_ms)
+        self.assertEqual("Hello world.", cues[0].text)
+        self.assertEqual("Again.", cues[1].text)
+
+    def test_sherpa_runtime_candidates_respects_override_with_cpu_fallback(self) -> None:
+        candidates = sherpa_runtime_candidates(get_env={providers.SHERPA_ONNX_PROVIDER_ENV: "coreml"}.get)
+
+        self.assertEqual(["coreml", "cpu"], candidates)
+
+    def test_sherpa_transcription_falls_back_to_cpu_and_ignores_language(self) -> None:
+        calls: list[str] = []
+
+        class FakeRecognizer:
+            def create_stream(self) -> object:
+                return FakeStream()
+
+            def decode_stream(self, _stream: object) -> None:
+                return None
+
+        class FakeStream:
+            result = types.SimpleNamespace(text="Hello.", tokens=[" Hello", "."], timestamps=[0.0, 0.5])
+
+            def accept_waveform(self, _sample_rate: int, _samples: object) -> None:
+                return None
+
+        class FakeOfflineRecognizer:
+            @staticmethod
+            def from_transducer(**kwargs: object) -> FakeRecognizer:
+                provider = str(kwargs.get("provider", "cpu"))
+                calls.append(provider)
+                if provider != "cpu":
+                    raise RuntimeError("accelerator unavailable")
+                return FakeRecognizer()
+
+        fake_sherpa = types.SimpleNamespace(OfflineRecognizer=FakeOfflineRecognizer)
+        fake_numpy = types.SimpleNamespace()
+        stderr = StringIO()
+        with patch.dict(sys.modules, {"sherpa_onnx": fake_sherpa, "numpy": fake_numpy}):
+            with patch.object(providers, "sherpa_runtime_candidates", lambda: ["cuda", "cpu"]):
+                with patch.object(providers, "read_sherpa_wave", lambda *_args: (object(), 16000)):
+                    with patch("sys.stderr", stderr):
+                        cues = providers.transcribe_sherpa_parakeet_wav(Path("audio.wav"), Path("audio.wav"))
+
+        self.assertEqual(["cuda", "cpu"], calls)
+        self.assertEqual("Hello.", cues[0].text)
+        self.assertIn("sherpa-parakeet selected CPU runtime", stderr.getvalue())
+
+    def test_sherpa_provider_transcribe_ignores_language_argument(self) -> None:
+        provider = get_provider("sherpa-parakeet")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio = Path(tmpdir) / "audio.mp3"
+            output = Path(tmpdir) / "out.srt"
+            audio.write_bytes(b"audio")
+            with patch.object(providers, "ensure_sherpa_parakeet_model", lambda *_args, **_kwargs: Path(tmpdir)):
+                with patch.object(providers, "prepare_sherpa_audio", lambda *_args, **_kwargs: None):
+                    with patch.object(providers, "transcribe_sherpa_parakeet_wav", lambda *_args, **_kwargs: [providers.Cue(index=1, start_ms=0, end_ms=1000, text="hello")]):
+                        provider.transcribe(audio, output, None, "fr")
+
+            self.assertTrue(output.exists())
+
+    def _unexpected_get(self, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("download should not be attempted")
+
+
+class FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+        self.iterated = False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int) -> list[bytes]:
+        self.iterated = True
+        return [self.payload[index : index + chunk_size] for index in range(0, len(self.payload), chunk_size)]
+
+
+def _model_archive_bytes() -> bytes:
+    buffer = BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:bz2") as archive:
+        for filename in providers.SHERPA_PARAKEET_REQUIRED_FILES:
+            data = b"asset"
+            info = tarfile.TarInfo(f"{providers.SHERPA_PARAKEET_MODEL_DIRNAME}/{filename}")
+            info.size = len(data)
+            archive.addfile(info, BytesIO(data))
+    return buffer.getvalue()
 
 
 if __name__ == "__main__":

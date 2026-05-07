@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import re
+import sys
+import tarfile
 import tempfile
 import time
+import wave
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,6 +26,16 @@ class ProviderError(RuntimeError):
 
 
 TRANSCRIPTION_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
+SHERPA_PARAKEET_MODEL_KEY = "parakeet-tdt-0.6b-v3-int8"
+SHERPA_PARAKEET_MODEL_DIRNAME = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+SHERPA_PARAKEET_MODEL_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+    "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
+)
+SHERPA_PARAKEET_REQUIRED_FILES = ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt")
+SHERPA_PARAKEET_CACHE_ENV = "SHERPA_ONNX_PARAKEET_CACHE_DIR"
+SHERPA_ONNX_PROVIDER_ENV = "SHERPA_ONNX_PROVIDER"
+SHERPA_ONNX_NUM_THREADS_ENV = "SHERPA_ONNX_NUM_THREADS"
 
 
 class TranscriptionProvider(Protocol):
@@ -394,10 +409,315 @@ def _vertex_gemini_timestamp_ms(segment: dict[str, object], key: str) -> int:
         raise ProviderError(f"vertex-gemini returned a segment with invalid {key} timestamp") from exc
 
 
+@dataclass(frozen=True)
+class SherpaParakeetProvider:
+    name: str = "sherpa-parakeet"
+    models: dict[str, str] = None  # type: ignore[assignment]
+    default_model: str = SHERPA_PARAKEET_MODEL_KEY
+    required_env_vars: tuple[str, ...] = ()
+    model_url: str = SHERPA_PARAKEET_MODEL_URL
+
+    def __post_init__(self) -> None:
+        if self.models is None:
+            object.__setattr__(self, "models", {SHERPA_PARAKEET_MODEL_KEY: SHERPA_PARAKEET_MODEL_DIRNAME})
+
+    def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
+        resolve_model(self, model)
+        model_dir = ensure_sherpa_parakeet_model(self.model_url)
+        with tempfile.TemporaryDirectory(prefix="sherpa-parakeet-") as tmpdir:
+            wav_path = Path(tmpdir) / f"{audio_path.stem}.wav"
+            prepare_sherpa_audio(audio_path, wav_path)
+            cues = transcribe_sherpa_parakeet_wav(model_dir, wav_path)
+        atomic_write_srt(output_path, cues)
+
+
+def sherpa_parakeet_cache_root(get_env: Callable[[str], str | None] = os.environ.get) -> Path:
+    configured = get_env(SHERPA_PARAKEET_CACHE_ENV)
+    if configured:
+        return Path(configured).expanduser()
+    xdg_cache = get_env("XDG_CACHE_HOME")
+    if xdg_cache:
+        return Path(xdg_cache).expanduser() / "video-to-srt"
+    return Path.home() / ".cache" / "video-to-srt"
+
+
+def sherpa_parakeet_model_dir(get_env: Callable[[str], str | None] = os.environ.get) -> Path:
+    return sherpa_parakeet_cache_root(get_env) / SHERPA_PARAKEET_MODEL_DIRNAME
+
+
+def ensure_sherpa_parakeet_model(
+    model_url: str = SHERPA_PARAKEET_MODEL_URL,
+    get_env: Callable[[str], str | None] = os.environ.get,
+    request_get: Callable[..., requests.Response] = requests.get,
+) -> Path:
+    model_dir = sherpa_parakeet_model_dir(get_env)
+    if sherpa_parakeet_model_is_valid(model_dir):
+        return model_dir
+
+    model_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="sherpa-parakeet-download-", dir=model_dir.parent) as tmpdir:
+        tmp_path = Path(tmpdir)
+        archive_path = tmp_path / "model.tar.bz2"
+        try:
+            response = request_get(model_url, stream=True, timeout=300)
+            response.raise_for_status()
+            with archive_path.open("wb") as archive:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        archive.write(chunk)
+            safe_extract_tar(archive_path, tmp_path)
+        except (OSError, tarfile.TarError, requests.RequestException) as exc:
+            raise ProviderError(f"sherpa-parakeet model cache failed: {exc}") from exc
+
+        extracted = tmp_path / SHERPA_PARAKEET_MODEL_DIRNAME
+        if not sherpa_parakeet_model_is_valid(extracted):
+            raise ProviderError("sherpa-parakeet model cache failed: downloaded archive missing required model files")
+        if model_dir.exists():
+            remove_existing_model_dir(model_dir)
+        extracted.replace(model_dir)
+    return model_dir
+
+
+def sherpa_parakeet_model_is_valid(model_dir: Path) -> bool:
+    return all((model_dir / filename).is_file() for filename in SHERPA_PARAKEET_REQUIRED_FILES)
+
+
+def safe_extract_tar(archive_path: Path, destination: Path) -> None:
+    destination = destination.resolve()
+    with tarfile.open(archive_path) as archive:
+        for member in archive.getmembers():
+            target = (destination / member.name).resolve()
+            if destination != target and destination not in target.parents:
+                raise ProviderError("sherpa-parakeet model cache failed: archive contains unsafe paths")
+        archive.extractall(destination)
+
+
+def remove_existing_model_dir(model_dir: Path) -> None:
+    if not model_dir.is_dir():
+        model_dir.unlink(missing_ok=True)
+        return
+    for child in model_dir.iterdir():
+        if child.is_dir():
+            remove_existing_model_dir(child)
+        else:
+            child.unlink()
+    model_dir.rmdir()
+
+
+def prepare_sherpa_audio(audio_path: Path, wav_path: Path) -> None:
+    try:
+        from moviepy import AudioFileClip  # type: ignore
+    except ImportError as exc:
+        raise ProviderError("sherpa-parakeet audio preparation failed: moviepy is required") from exc
+
+    clip = None
+    try:
+        clip = AudioFileClip(str(audio_path))
+        clip.write_audiofile(
+            str(wav_path),
+            fps=16000,
+            nbytes=2,
+            codec="pcm_s16le",
+            ffmpeg_params=["-ac", "1"],
+            logger=None,
+        )
+    except Exception as exc:
+        raise ProviderError(f"sherpa-parakeet audio preparation failed: {exc}") from exc
+    finally:
+        if clip is not None:
+            clip.close()
+
+    if not wav_path.is_file() or wav_path.stat().st_size == 0:
+        raise ProviderError("sherpa-parakeet audio preparation failed: converted audio file is empty")
+
+
+def transcribe_sherpa_parakeet_wav(model_dir: Path, wav_path: Path) -> list[Cue]:
+    try:
+        import numpy as np  # type: ignore
+        import sherpa_onnx  # type: ignore
+    except ImportError as exc:
+        raise ProviderError(f"sherpa-parakeet failed to load sherpa-onnx runtime: {exc}") from exc
+
+    samples, sample_rate = read_sherpa_wave(wav_path, np)
+    last_error: Exception | None = None
+    for runtime_provider in sherpa_runtime_candidates():
+        try:
+            recognizer, selected_provider = create_sherpa_parakeet_recognizer(sherpa_onnx, model_dir, runtime_provider)
+            log_sherpa_runtime_selection(selected_provider)
+            stream = recognizer.create_stream()
+            stream.accept_waveform(sample_rate, samples)
+            if hasattr(recognizer, "decode_stream"):
+                recognizer.decode_stream(stream)
+            else:
+                recognizer.decode_streams([stream])
+            return sherpa_result_to_cues(stream.result)
+        except Exception as exc:  # sherpa runtime errors vary by platform/provider
+            last_error = exc
+            if runtime_provider == "cpu":
+                break
+    raise ProviderError(f"sherpa-parakeet transcription failed: {last_error}") from last_error
+
+
+def read_sherpa_wave(wav_path: Path, np: object) -> tuple[object, int]:
+    try:
+        with wave.open(str(wav_path)) as wav:
+            if wav.getnchannels() != 1:
+                raise ProviderError("sherpa-parakeet audio preparation failed: converted audio is not mono")
+            if wav.getsampwidth() != 2:
+                raise ProviderError("sherpa-parakeet audio preparation failed: converted audio is not 16-bit PCM")
+            raw = wav.readframes(wav.getnframes())
+            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
+            return samples, wav.getframerate()
+    except wave.Error as exc:
+        raise ProviderError(f"sherpa-parakeet audio preparation failed: {exc}") from exc
+
+
+def sherpa_runtime_candidates(get_env: Callable[[str], str | None] = os.environ.get) -> list[str]:
+    configured = get_env(SHERPA_ONNX_PROVIDER_ENV)
+    if configured:
+        return [configured, "cpu"] if configured != "cpu" else ["cpu"]
+    candidates = ["cuda"]
+    if platform.system() == "Darwin" and platform.machine() in {"arm64", "aarch64"}:
+        candidates.insert(0, "coreml")
+    candidates.append("cpu")
+    return candidates
+
+
+def create_sherpa_parakeet_recognizer(sherpa_onnx: object, model_dir: Path, runtime_provider: str) -> tuple[object, str]:
+    kwargs: dict[str, object] = {
+        "encoder": str(model_dir / "encoder.int8.onnx"),
+        "decoder": str(model_dir / "decoder.int8.onnx"),
+        "joiner": str(model_dir / "joiner.int8.onnx"),
+        "tokens": str(model_dir / "tokens.txt"),
+        "num_threads": sherpa_num_threads(),
+        "sample_rate": 16000,
+        "feature_dim": 80,
+        "decoding_method": "greedy_search",
+        "debug": False,
+        "model_type": "nemo_transducer",
+    }
+    if runtime_provider != "cpu":
+        kwargs["provider"] = runtime_provider
+    try:
+        return sherpa_onnx.OfflineRecognizer.from_transducer(**kwargs), runtime_provider
+    except TypeError:
+        if "provider" not in kwargs:
+            raise
+        kwargs.pop("provider")
+        return sherpa_onnx.OfflineRecognizer.from_transducer(**kwargs), "cpu"
+
+
+def log_sherpa_runtime_selection(runtime_provider: str) -> None:
+    labels = {"coreml": "CoreML", "cuda": "GPU", "cpu": "CPU"}
+    label = labels.get(runtime_provider, runtime_provider)
+    print(f"sherpa-parakeet selected {label} runtime", file=sys.stderr)
+
+
+def sherpa_num_threads(get_env: Callable[[str], str | None] = os.environ.get) -> int:
+    value = get_env(SHERPA_ONNX_NUM_THREADS_ENV)
+    if not value:
+        return 2
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 2
+
+
+def sherpa_result_to_cues(result: object) -> list[Cue]:
+    segments = getattr(result, "segments", None)
+    if isinstance(segments, list) and segments:
+        return sherpa_segments_to_cues(segments)
+
+    text = str(getattr(result, "text", "") or "").strip()
+    tokens = list(getattr(result, "tokens", None) or [])
+    timestamps = list(getattr(result, "timestamps", None) or [])
+    if tokens and timestamps:
+        return sherpa_tokens_to_cues(tokens, timestamps)
+    if text:
+        return [Cue(index=1, start_ms=0, end_ms=max(1000, round(len(text) * 1000 / 15)), text=text)]
+    raise ProviderError("sherpa-parakeet returned no transcription text")
+
+
+def sherpa_segments_to_cues(segments: list[object]) -> list[Cue]:
+    cues: list[Cue] = []
+    for segment in segments:
+        if isinstance(segment, dict):
+            text = str(segment.get("text") or segment.get("segment") or "").strip()
+            start = segment.get("start")
+            end = segment.get("end")
+        else:
+            text = str(getattr(segment, "text", "") or getattr(segment, "segment", "")).strip()
+            start = getattr(segment, "start", None)
+            end = getattr(segment, "end", None)
+        if not text:
+            continue
+        try:
+            start_ms = round(float(start) * 1000)
+            end_ms = round(float(end) * 1000)
+        except (TypeError, ValueError) as exc:
+            raise ProviderError("sherpa-parakeet returned a segment with invalid timestamp") from exc
+        if end_ms <= start_ms:
+            raise ProviderError("sherpa-parakeet returned a non-positive-duration segment")
+        cues.append(Cue(index=len(cues) + 1, start_ms=start_ms, end_ms=end_ms, text=text))
+    if not cues:
+        raise ProviderError("sherpa-parakeet returned no transcription text")
+    return cues
+
+
+def sherpa_tokens_to_cues(tokens: list[object], timestamps: list[object]) -> list[Cue]:
+    cues: list[Cue] = []
+    current_tokens: list[str] = []
+    current_start_ms: int | None = None
+    previous_start_ms = -1
+    usable = min(len(tokens), len(timestamps))
+    for index in range(usable):
+        token = str(tokens[index])
+        if not token:
+            continue
+        try:
+            start_ms = round(float(timestamps[index]) * 1000)
+        except (TypeError, ValueError) as exc:
+            raise ProviderError("sherpa-parakeet returned an invalid token timestamp") from exc
+        if start_ms < previous_start_ms:
+            raise ProviderError("sherpa-parakeet returned out-of-order timestamps")
+        previous_start_ms = start_ms
+        if current_start_ms is None:
+            current_start_ms = start_ms
+        current_tokens.append(token)
+        text = normalize_sherpa_text("".join(current_tokens))
+        next_start_ms = sherpa_next_timestamp_ms(timestamps, index, start_ms)
+        if next_start_ms - current_start_ms >= 7000 or len(text) > 84 or text.endswith((".", "?", "!")):
+            cues.append(Cue(index=len(cues) + 1, start_ms=current_start_ms, end_ms=max(next_start_ms, current_start_ms + 1), text=text))
+            current_tokens = []
+            current_start_ms = None
+    if current_tokens and current_start_ms is not None:
+        text = normalize_sherpa_text("".join(current_tokens))
+        end_ms = sherpa_next_timestamp_ms(timestamps, usable - 1, current_start_ms)
+        cues.append(Cue(index=len(cues) + 1, start_ms=current_start_ms, end_ms=max(end_ms, current_start_ms + 1000), text=text))
+    if not cues:
+        raise ProviderError("sherpa-parakeet returned no transcription text")
+    return cues
+
+
+def sherpa_next_timestamp_ms(timestamps: list[object], index: int, fallback_ms: int) -> int:
+    if index + 1 >= len(timestamps):
+        return fallback_ms + 500
+    try:
+        return round(float(timestamps[index + 1]) * 1000)
+    except (TypeError, ValueError):
+        return fallback_ms + 500
+
+
+def normalize_sherpa_text(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+([,.;:!?])", r"\1", text)
+
+
 PROVIDERS: dict[str, TranscriptionProvider] = {
     "voxtral": VoxtralProvider(),
     "grok": GrokProvider(),
     "vertex-gemini": VertexGeminiProvider(),
+    "sherpa-parakeet": SherpaParakeetProvider(),
 }
 
 

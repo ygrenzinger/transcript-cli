@@ -40,6 +40,14 @@ export GOOGLE_CLOUD_LOCATION="us-central1"
 
 The `vertex-gemini` provider uses Vertex AI Gemini with `gemini-2.5-flash` by default. It also supports `gemini-2.5-pro` via `--model gemini-2.5-pro`. Its subtitle timestamps are model-derived and approximate, because Gemini is used as a multimodal generative model rather than a dedicated speech-to-text API with native word timings.
 
+Sherpa Parakeet transcription requires no cloud credentials. On first use, it downloads and caches the sherpa-onnx Parakeet V3 int8 model under the user cache directory. Override the cache root when needed:
+
+```bash
+export SHERPA_ONNX_PARAKEET_CACHE_DIR="/path/to/cache"
+```
+
+The `sherpa-parakeet` provider uses `parakeet-tdt-0.6b-v3-int8` by default. It tries an available sherpa-onnx accelerator runtime such as CoreML or CUDA before falling back to CPU. Set `SHERPA_ONNX_PROVIDER` to force a provider such as `cpu`, `coreml`, or `cuda`; set `SHERPA_ONNX_NUM_THREADS` to control CPU thread count. Parakeet V3 auto-detects supported languages, so `--language` is accepted but ignored for this provider.
+
 ## Full Video Pipeline
 
 Extract audio and transcribe in one command:
@@ -64,6 +72,12 @@ Use Vertex Gemini Pro instead:
 
 ```bash
 uv run video-to-srt --provider vertex-gemini --model gemini-2.5-pro "/path/to/video.mkv"
+```
+
+Use local Sherpa Parakeet instead:
+
+```bash
+uv run video-to-srt --provider sherpa-parakeet "/path/to/video.mkv"
 ```
 
 Specify a language when supported by the provider:
