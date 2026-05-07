@@ -1,0 +1,35 @@
+python/pyproject.toml
+  s_b0bf63e9993ecc::t_48ec70673b56b9 6
+python/providers.py
+  s_b0bf63e9993ecc::t_4099ccb20e1d53 296-303
+  s_b0bf63e9993ecc::t_a67dc536d22c4e 7,30,104,112,160,169,250-295,304-396,400,429-434,438
+python/test_providers.py
+  s_b0bf63e9993ecc::t_0bf0dade7325d1 53-54
+  s_b0bf63e9993ecc::t_3351088503cf3c 1-52,55-87
+python/test_pipeline_outputs.py
+  s_b0bf63e9993ecc::t_5f00253ae19b7b 17,75-88
+openspec/specs/audio-to-srt-transcription/spec.md
+  s_b0bf63e9993ecc::t_43deb732247a7b 57,61,69,86-100,112,116-117,120,122-123,127-132,153-183
+openspec/specs/pipeline-orchestrator/spec.md
+  s_b0bf63e9993ecc::t_43deb732247a7b 24,27,31,43-57,78-83,147,155-156,160,163-169
+python/README.md
+  s_b0bf63e9993ecc::t_558c57c8b18274 33-40,42,57-60
+  s_b0bf63e9993ecc::t_20f9a8b51179a8 41,61-66
+  s_b0bf63e9993ecc::t_b9772b4a9f669e 92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "319981be4cc29d368e4cf9c542c790fcd1d8c0d0",
+  "prompts": {},
+  "sessions": {
+    "s_b0bf63e9993ecc": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fdf90a75ffeezLHaouzJiJX7w",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
