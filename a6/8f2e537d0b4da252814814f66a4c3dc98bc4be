@@ -1,0 +1,79 @@
+openspec/specs/srt-standardization/spec.md
+  s_518ea869cb0a0f::t_633302412ae867 8-22
+openspec/changes/add-transcription-provider-retries/.openspec.yaml
+  s_e692311446f2c5::t_19a254ec2a3c38 1-2
+openspec/changes/add-transcription-provider-retries/design.md
+  s_e692311446f2c5::t_d3cdde7aceeda0 1-38
+python/README.md
+  s_f91fc1a8e2e0d7::t_a99d87228967d3 53,56,70
+  s_f91fc1a8e2e0d7::t_b3ca2c2e0b9f13 3,67
+python/transcribe.py
+  s_f91fc1a8e2e0d7::t_a5597e87fc86a3 7-8,10,12-18,20-92,94-97,101-102,106,109-110,114-115
+  s_518ea869cb0a0f::t_cac2f2a07238cc 19
+  s_518ea869cb0a0f::t_dcf3afea679b6b 93
+python/pyproject.toml
+  s_f91fc1a8e2e0d7::t_275f7e1de810a8 12
+python/providers.py
+  s_e692311446f2c5::t_0d1e03f1a793c0 6,8-9,22-24,35-95
+openspec/changes/add-transcription-provider-retries/proposal.md
+  s_e692311446f2c5::t_4197062c5804e5 1-28
+python/.gitignore
+  h_1a3147ea652b40 3
+openspec/changes/add-transcription-provider-retries/tasks.md
+  s_e692311446f2c5::t_bd0e5382590ef7 3-6,10-12
+  s_e692311446f2c5::t_c7c6f094e1e84f 1-2,7-9,13-15
+  s_e692311446f2c5::t_f7229c8c292ec2 16-20
+  s_e692311446f2c5::t_c7599915562ada 21
+python/extract_audio.py
+  s_f91fc1a8e2e0d7::t_598d89024b870a 40
+openspec/changes/add-transcription-provider-retries/specs/audio-to-srt-transcription/spec.md
+  s_e692311446f2c5::t_769a13fda8306c 1-33
+python/standardize_srt.py
+  s_134db744afba36::t_b33df7ce82494c 135-137
+  s_518ea869cb0a0f::t_dcf3afea679b6b 142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "a68f2e537d0b4da252814814f66a4c3dc98bc4be",
+  "prompts": {},
+  "humans": {
+    "h_1a3147ea652b40": {
+      "author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_134db744afba36": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fe996768ffeNvF9o9Plz1f0lq",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_518ea869cb0a0f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fe94bc99ffeK8wuWerTCgCysf",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_e692311446f2c5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_2013a7be4ffeasCleBkWZcYjaW",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_f91fc1a8e2e0d7": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_201260ef8ffegMBj9LaLUY5NhQ",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
