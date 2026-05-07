@@ -86,6 +86,7 @@ def run_pipeline(
         lambda: transcribe_with_retries(provider, audio_path, raw_srt, model, language),
         artifact=raw_srt,
     )
+    audio_path.unlink(missing_ok=True)
 
     if not improve:
         return raw_srt

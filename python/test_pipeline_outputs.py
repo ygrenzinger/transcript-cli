@@ -44,6 +44,7 @@ class PipelineOutputTests(unittest.TestCase):
 
             self.assertEqual(video.with_suffix(".fake.raw.srt"), output)
             self.assertTrue(output.exists())
+            self.assertFalse(video.with_suffix(".mp3").exists())
             self.assertFalse(video.with_suffix(".fake.improved.srt").exists())
 
     def test_improved_pipeline_writes_provider_improved_srt(self) -> None:
@@ -57,8 +58,21 @@ class PipelineOutputTests(unittest.TestCase):
             self.assertEqual(video.with_suffix(".fake.improved.srt"), output)
             self.assertTrue(video.with_suffix(".fake.raw.srt").exists())
             self.assertTrue(output.exists())
+            self.assertFalse(video.with_suffix(".mp3").exists())
 
-    def _stub_pipeline(self, video: Path) -> None:
+    def test_pipeline_keeps_audio_when_transcription_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video = Path(tmpdir) / "clip.mp4"
+            video.write_bytes(b"video")
+            self._stub_pipeline(video, transcribe_failure=True)
+
+            with self.assertRaises(RuntimeError):
+                transcribe.run_pipeline(video, "fake", None, None, False)
+
+            self.assertTrue(video.with_suffix(".mp3").exists())
+            self.assertFalse(video.with_suffix(".fake.raw.srt").exists())
+
+    def _stub_pipeline(self, video: Path, transcribe_failure: bool = False) -> None:
         provider = FakeProvider()
 
         def extract_audio(_: Path) -> Path:
@@ -67,6 +81,8 @@ class PipelineOutputTests(unittest.TestCase):
             return audio
 
         def transcribe_with_retries(*args: object) -> None:
+            if transcribe_failure:
+                raise RuntimeError("transcription failed")
             output_path = args[2]
             assert isinstance(output_path, Path)
             write_srt(output_path, [Cue(index=1, start_ms=0, end_ms=1000, text="hello")])

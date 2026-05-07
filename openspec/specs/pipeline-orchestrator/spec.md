@@ -102,20 +102,26 @@ If any stage exits non-zero, the orchestrator SHALL stop, propagate the non-zero
 - AND it returns the provider's non-zero exit status (or wraps it)
 
 ### Requirement: Intermediate artifacts
-Intermediate files, including extracted audio and raw provider SRT, MAY be persisted next to the source video for caching and debugging. Raw provider SRT SHALL be preserved as `<video>.<provider>.raw.srt`. Improved SRT SHALL be written as `<video>.<provider>.improved.srt` only when subtitle improvement is enabled.
+Intermediate files SHALL be managed by the orchestrator according to their lifecycle. Raw provider SRT SHALL be preserved as `<video>.<provider>.raw.srt`. Improved SRT SHALL be written as `<video>.<provider>.improved.srt` only when subtitle improvement is enabled. Extracted audio SHALL be removed after successful raw SRT creation and SHALL NOT be preserved as a reusable intermediate artifact for successful runs.
 
-#### Scenario: Cached audio reused
-- GIVEN a previous run already produced `path/to/clip.mp3`
-- WHEN the orchestrator runs again on `path/to/clip.mp4`
-- THEN it MAY reuse the existing MP3 instead of re-extracting
-- AND it still re-runs transcription
-- AND it runs subtitle improvement only when requested
+#### Scenario: Audio removed after raw SRT creation
+- GIVEN a video at `path/to/clip.mp4` and a registered provider `voxtral`
+- WHEN the orchestrator successfully writes `path/to/clip.voxtral.raw.srt`
+- THEN `path/to/clip.mp3` is removed from the filesystem
+- AND `path/to/clip.voxtral.raw.srt` remains on the filesystem
+
+#### Scenario: Audio retained when transcription fails
+- GIVEN audio extraction produced `path/to/clip.mp3`
+- WHEN the transcription provider exits with a non-zero status before writing a valid raw SRT
+- THEN the orchestrator stops the pipeline
+- AND it does not remove `path/to/clip.mp3`
 
 #### Scenario: Multiple providers do not overwrite improved artifacts
 - GIVEN `voxtral` and `grok` are registered providers
 - WHEN the user runs improved transcription with both providers for `path/to/clip.mp4`
 - THEN the pipeline writes separate improved files for each provider
 - AND the provider name appears in each improved SRT filename
+- AND extracted audio from each successful run is removed after that run's raw SRT is created
 
 ### Requirement: Single-command UX
 The orchestrator SHALL be invocable with a single command requiring only the video path and credentials in environment variables. No interactive prompts or manual file shuffling SHALL be required. Subtitle improvement SHALL be enabled with an explicit CLI option or equivalent non-interactive configuration.
