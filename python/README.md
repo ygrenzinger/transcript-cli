@@ -1,6 +1,6 @@
 # Video To SRT
 
-Python tool for transcribing videos to standardized SRT files.
+Python tool for transcribing videos to raw SRT files, with optional subtitle improvement.
 
 ## Setup
 
@@ -32,7 +32,7 @@ export MISTRAL_API_KEY="..."
 
 ## Full Video Pipeline
 
-Extract audio, transcribe, validate, and standardize in one command:
+Extract audio and transcribe in one command:
 
 ```bash
 uv run video-to-srt --provider grok "/path/to/video.mkv"
@@ -50,17 +50,23 @@ Specify a language when supported by the provider:
 uv run video-to-srt --provider grok --language en "/path/to/video.mkv"
 ```
 
-Write the final SRT to a custom path:
+Improve subtitles for readability:
 
 ```bash
-uv run video-to-srt --provider voxtral --output "/path/to/output.srt" "/path/to/video.mkv"
+uv run video-to-srt --provider voxtral --improve-subtitles "/path/to/video.mkv"
+```
+
+Write improved subtitles to a custom path:
+
+```bash
+uv run video-to-srt --provider voxtral --improve-subtitles --output "/path/to/output.srt" "/path/to/video.mkv"
 ```
 
 Outputs:
 
 - Cached audio: `/path/to/video.mp3`
 - Raw provider SRT: `/path/to/video.<provider>.raw.srt`
-- Final standardized SRT: `/path/to/video.srt`
+- Improved SRT, when requested: `/path/to/video.<provider>.improved.srt`
 
 ## Direct Script Usage
 
@@ -68,4 +74,10 @@ Only `transcribe.py` is intended to be run directly:
 
 ```bash
 ./transcribe.py --provider grok "/path/to/video.mkv"
+```
+
+Improve an existing raw SRT directly:
+
+```bash
+uv run improve-subtitles "/path/to/video.voxtral.raw.srt" "/path/to/video.voxtral.improved.srt"
 ```

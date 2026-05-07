@@ -1,19 +1,26 @@
 # pipeline-orchestrator Specification
 
 ## Purpose
-Compose the four lower-level capabilities (`audio-extraction`, `audio-to-srt-transcription`, `srt-validation`, `srt-standardization`) into a single end-to-end pipeline that turns a video file into a polished SRT file. The orchestrator is the only component that knows the order of stages and how they are wired; each stage remains independently swappable. This is what gives the user a one-command experience while still letting them choose which transcription provider/model to use.
+Compose the lower-level capabilities (`audio-extraction`, `audio-to-srt-transcription`, optional `subtitle-improvement`, and `srt-validation` for improved output) into a single end-to-end pipeline that turns a video file into provider-specific SRT artifacts. The orchestrator is the only component that knows the order of stages and how they are wired; each stage remains independently swappable. This is what gives the user a one-command experience while still letting them choose which transcription provider/model to use.
 
 ## Requirements
 
 ### Requirement: End-to-end pipeline
-Given a video path and a chosen provider, the orchestrator SHALL execute the following stages in order: (1) audio extraction, (2) audio-to-SRT transcription via the selected provider, (3) SRT validation, (4) SRT standardization. The final output SHALL be a single `.srt` file written next to the source video.
+Given a video path and a chosen provider, the orchestrator SHALL execute audio extraction and audio-to-SRT transcription via the selected provider. The raw transcription output SHALL be written next to the source video as `<video>.<provider>.raw.srt`. If subtitle improvement is requested, the orchestrator SHALL additionally run subtitle improvement and write `<video>.<provider>.improved.srt`.
 
-#### Scenario: Happy path
-- GIVEN a video at `path/to/clip.mp4`, the required API credentials in the environment, and a registered provider
-- WHEN the orchestrator is invoked with `path/to/clip.mp4` and the provider name
-- THEN it produces `path/to/clip.srt`
-- AND each of the four stages has been executed exactly once
-- AND the final file passes `srt-validation`
+#### Scenario: Raw-only happy path
+- GIVEN a video at `path/to/clip.mp4`, the required API credentials in the environment, and a registered provider `voxtral`
+- WHEN the orchestrator is invoked with `path/to/clip.mp4` and `--provider voxtral`
+- THEN it produces `path/to/clip.voxtral.raw.srt`
+- AND it does not produce `path/to/clip.voxtral.improved.srt`
+- AND audio extraction and transcription have each been executed exactly once
+
+#### Scenario: Improved happy path
+- GIVEN a video at `path/to/clip.mp4`, the required API credentials in the environment, and a registered provider `voxtral`
+- WHEN the orchestrator is invoked with `path/to/clip.mp4`, `--provider voxtral`, and subtitle improvement enabled
+- THEN it produces `path/to/clip.voxtral.raw.srt`
+- AND it produces `path/to/clip.voxtral.improved.srt`
+- AND the improved file passes `srt-validation`
 
 ### Requirement: Provider and model selection
 The orchestrator SHALL expose a `--provider` option (or equivalent) to select between registered transcription providers (e.g. `voxtral`, `grok`) and a `--model` option for providers that expose model selection. Defaults SHALL be documented and stable. The `voxtral` provider SHALL expose exactly one supported model, `voxtral-mini-2602`, and SHALL use it by default.
@@ -41,41 +48,48 @@ The orchestrator SHALL expose a `--provider` option (or equivalent) to select be
 - AND the error message lists available providers (or models for the given provider)
 
 ### Requirement: Stage isolation and swappability
-Each stage SHALL be invoked through a stable interface that does not depend on the implementation details of other stages. Replacing one stage's implementation SHALL NOT require changes to the others.
+Each stage SHALL be invoked through a stable interface that does not depend on the implementation details of other stages. Replacing one stage's implementation SHALL NOT require changes to the others. Subtitle improvement SHALL consume raw SRT through the same SRT parser and SHALL NOT depend on provider-specific implementation details beyond the artifact path.
 
 #### Scenario: Replace the extractor
-- GIVEN the audio-extraction implementation is replaced (e.g. moviepy → ffmpeg-python)
+- GIVEN the audio-extraction implementation is replaced
 - WHEN the orchestrator runs
-- THEN the transcription, validation, and standardization stages work without modification, provided the new extractor still produces an MP3 at the agreed path
+- THEN the transcription and optional subtitle-improvement stages work without modification, provided the new extractor still produces an MP3 at the agreed path
 
 #### Scenario: Add a new transcription provider
 - GIVEN a third provider is added by registering it under a new name
 - WHEN the user selects it via `--provider`
-- THEN it is invoked through the same provider interface, and the validation and standardization stages process its output unchanged
+- THEN it is invoked through the same provider interface
+- AND optional subtitle improvement processes its raw SRT output unchanged
 
 ### Requirement: Validation gate
-The orchestrator SHALL run `srt-validation` on the provider's raw output before standardization, and again on the standardized output before declaring success. If either validation fails, the orchestrator SHALL exit with a non-zero status.
+The orchestrator SHALL validate improved subtitle output before declaring the improvement step successful. The orchestrator SHALL NOT require strict raw SRT validation before subtitle improvement, because subtitle improvement is responsible for tolerating provider artifacts such as non-positive-duration cues that can be safely removed.
 
-#### Scenario: Provider output fails validation
-- GIVEN a provider that produces a malformed SRT (e.g. broken timestamps)
-- WHEN the orchestrator runs
-- THEN the first validation step fails
-- AND the orchestrator exits with a non-zero status reporting the validation error
-- AND no `.srt` file is delivered to the user
+#### Scenario: Raw provider output contains removable invalid cue
+- GIVEN a provider raw SRT contains a cue whose end timestamp equals its start timestamp
+- WHEN the orchestrator runs with subtitle improvement enabled
+- THEN subtitle improvement removes that cue
+- AND the orchestrator validates the improved output
 
-#### Scenario: Standardization output fails validation
-- GIVEN standardization produces a file that does not pass validation
-- WHEN the orchestrator runs the post-standardization validation
+#### Scenario: Improved output fails validation
+- GIVEN subtitle improvement produces a file that does not pass validation
+- WHEN the orchestrator runs the post-improvement validation
 - THEN it fails the run with a clear error
-- AND the bug is treated as a defect in the standardization step, not the user's input
+- AND the bug is treated as a defect in the subtitle-improvement step, not the user's input
 
 ### Requirement: Stage progress reporting
-The orchestrator SHALL report the start and completion of each stage on stderr, so that the user can follow progress on a long video.
+The orchestrator SHALL report the start and completion of each executed stage on stderr, so that the user can follow progress on a long video. Progress totals SHALL reflect whether optional subtitle improvement is enabled.
 
-#### Scenario: Progress lines
-- GIVEN the orchestrator is invoked
+#### Scenario: Raw-only progress lines
+- GIVEN the orchestrator is invoked without subtitle improvement
 - WHEN it runs
-- THEN it emits at least one line per stage to stderr (e.g. `[1/4] Extracting audio…`, `[2/4] Transcribing with grok…`, `[3/4] Validating…`, `[4/4] Standardizing…`)
+- THEN it emits progress lines for audio extraction and transcription
+- AND the progress total reflects only executed stages
+
+#### Scenario: Improved progress lines
+- GIVEN the orchestrator is invoked with subtitle improvement enabled
+- WHEN it runs
+- THEN it emits progress lines for audio extraction, transcription, and subtitle improvement
+- AND the progress total reflects all executed stages
 
 ### Requirement: Failure stops the pipeline
 If any stage exits non-zero, the orchestrator SHALL stop, propagate the non-zero status, and NOT run subsequent stages.
@@ -84,25 +98,37 @@ If any stage exits non-zero, the orchestrator SHALL stop, propagate the non-zero
 - GIVEN the transcription provider exits with a non-zero status
 - WHEN the orchestrator handles that result
 - THEN it stops the pipeline immediately
-- AND it does not run validation or standardization
+- AND it does not run validation or subtitle improvement
 - AND it returns the provider's non-zero exit status (or wraps it)
 
 ### Requirement: Intermediate artifacts
-Intermediate files (extracted audio, raw provider SRT) MAY be persisted next to the source video for caching and debugging. They SHALL NOT block the user — the user only ever needs to provide the video and credentials.
+Intermediate files, including extracted audio and raw provider SRT, MAY be persisted next to the source video for caching and debugging. Raw provider SRT SHALL be preserved as `<video>.<provider>.raw.srt`. Improved SRT SHALL be written as `<video>.<provider>.improved.srt` only when subtitle improvement is enabled.
 
 #### Scenario: Cached audio reused
 - GIVEN a previous run already produced `path/to/clip.mp3`
 - WHEN the orchestrator runs again on `path/to/clip.mp4`
-- THEN it MAY reuse the existing MP3 (per `audio-extraction`'s idempotence rule) instead of re-extracting
-- AND it still re-runs transcription, validation, and standardization
+- THEN it MAY reuse the existing MP3 instead of re-extracting
+- AND it still re-runs transcription
+- AND it runs subtitle improvement only when requested
+
+#### Scenario: Multiple providers do not overwrite improved artifacts
+- GIVEN `voxtral` and `grok` are registered providers
+- WHEN the user runs improved transcription with both providers for `path/to/clip.mp4`
+- THEN the pipeline writes separate improved files for each provider
+- AND the provider name appears in each improved SRT filename
 
 ### Requirement: Single-command UX
-The orchestrator SHALL be invocable with a single command requiring only the video path and credentials in environment variables. No interactive prompts or manual file shuffling SHALL be required.
+The orchestrator SHALL be invocable with a single command requiring only the video path and credentials in environment variables. No interactive prompts or manual file shuffling SHALL be required. Subtitle improvement SHALL be enabled with an explicit CLI option or equivalent non-interactive configuration.
 
-#### Scenario: One-shot run
+#### Scenario: One-shot raw run
 - GIVEN a video and the required API key set in the environment
 - WHEN the user runs the orchestrator with the video as the only positional argument
-- THEN a `.srt` file is produced next to the video without further interaction
+- THEN a raw provider SRT file is produced next to the video without further interaction
+
+#### Scenario: One-shot improved run
+- GIVEN a video and the required API key set in the environment
+- WHEN the user runs the orchestrator with the video and the subtitle-improvement option
+- THEN a raw provider SRT file and an improved SRT file are produced next to the video without further interaction
 
 #### Scenario: Missing credentials
 - GIVEN the required API key environment variable is not set

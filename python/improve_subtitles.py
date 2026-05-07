@@ -138,19 +138,19 @@ def enforce_gaps(cues: list[Cue]) -> list[Cue]:
     return result
 
 
-def standardize_cues(cues: list[Cue]) -> list[Cue]:
+def improve_cues(cues: list[Cue]) -> list[Cue]:
     cues = [cue for cue in cues if cue.end_ms > cue.start_ms]
     cues = split_embedded_speaker_changes(cues)
     multi_speaker = len({cue.speaker for cue in cues if cue.speaker}) >= 2
-    standardized: list[Cue] = []
+    improved: list[Cue] = []
     for cue in cues:
         speaker = cue.speaker if multi_speaker else None
         base = replace(cue, speaker=speaker, text=" ".join(cue.text.split()))
-        standardized.extend(split_long_cue(base))
-    standardized = extend_for_cps(standardized)
-    standardized = enforce_gaps(standardized)
-    standardized = [replace(cue, text=wrap_cue_text(cue)) for cue in standardized if cue.text.strip()]
-    return reindex(standardized)
+        improved.extend(split_long_cue(base))
+    improved = extend_for_cps(improved)
+    improved = enforce_gaps(improved)
+    improved = [replace(cue, text=wrap_cue_text(cue)) for cue in improved if cue.text.strip()]
+    return reindex(improved)
 
 
 def wrap_cue_text(cue: Cue) -> str:
@@ -188,21 +188,21 @@ def split_embedded_speaker_changes(cues: list[Cue]) -> list[Cue]:
     return result
 
 
-def standardize_srt(input_path: Path | str, output_path: Path | str) -> None:
+def improve_subtitles(input_path: Path | str, output_path: Path | str) -> None:
     cues = parse_srt(Path(input_path))
     output = Path(output_path)
-    write_srt(output, standardize_cues(cues))
+    write_srt(output, improve_cues(cues))
     validate_srt(output)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Standardize an SRT file for readability.")
+    parser = argparse.ArgumentParser(description="Improve an SRT file for readability.")
     parser.add_argument("input_srt", type=Path)
     parser.add_argument("output_srt", type=Path, nargs="?")
     args = parser.parse_args(argv)
     output = args.output_srt or args.input_srt
     try:
-        standardize_srt(args.input_srt, output)
+        improve_subtitles(args.input_srt, output)
     except (OSError, SrtError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

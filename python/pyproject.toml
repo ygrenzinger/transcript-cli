@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 video-to-srt = "transcribe:main"
+improve-subtitles = "improve_subtitles:main"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -20,7 +21,7 @@ py-modules = [
     "extract_audio",
     "providers",
     "srt",
-    "standardize_srt",
+    "improve_subtitles",
     "transcribe",
     "transcribe_grok",
     "transcribe_mistral",
