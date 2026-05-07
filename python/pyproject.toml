@@ -9,11 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-extract-audio = "extract_audio:main"
-transcribe-srt = "transcribe:main"
-validate-srt = "validate_srt:main"
-standardize-srt = "standardize_srt:main"
-video-to-srt = "pipeline:main"
+video-to-srt = "transcribe:main"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -22,7 +18,6 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 py-modules = [
     "extract_audio",
-    "pipeline",
     "providers",
     "srt",
     "standardize_srt",

@@ -5,6 +5,21 @@ Reshape a raw SRT file (as produced by any transcription provider) so that it co
 
 ## Requirements
 
+### Requirement: Invalid raw cue filtering
+Standardization SHALL discard input cues whose end timestamp is less than or equal to their start timestamp before applying readability, speaker, gap, or re-indexing rules.
+
+#### Scenario: Zero-duration provider segment is removed
+- GIVEN an input cue with identical start and end timestamps
+- WHEN standardization runs
+- THEN that cue is omitted from the standardized output
+- AND the remaining cues are re-indexed sequentially
+
+#### Scenario: Negative-duration provider segment is removed
+- GIVEN an input cue whose end timestamp is earlier than its start timestamp
+- WHEN standardization runs
+- THEN that cue is omitted from the standardized output
+- AND standardization continues for the remaining cues
+
 ### Requirement: Cue duration limits
 Every cue in the standardized output SHALL last no longer than 7.0 seconds. The target duration is 1–6 seconds. Cues SHORTER than 1.0 second are permitted only when forced by a speaker change or a brief utterance with no following speech.
 

@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -16,6 +19,9 @@ class ProviderError(RuntimeError):
     pass
 
 
+TRANSCRIPTION_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
+
+
 class TranscriptionProvider(Protocol):
     name: str
     models: dict[str, str]
@@ -24,6 +30,69 @@ class TranscriptionProvider(Protocol):
 
     def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
         ...
+
+
+def transcribe_with_retries(
+    provider: TranscriptionProvider,
+    audio_path: Path,
+    output_path: Path,
+    model: str | None,
+    language: str | None,
+) -> None:
+    for attempt_index in range(len(TRANSCRIPTION_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            provider.transcribe(audio_path, output_path, model, language)
+            return
+        except ProviderError as exc:
+            if attempt_index == len(TRANSCRIPTION_RETRY_DELAYS_SECONDS) or not is_retryable_provider_error(exc):
+                raise
+            time.sleep(retry_delay_seconds(exc, TRANSCRIPTION_RETRY_DELAYS_SECONDS[attempt_index]))
+
+
+def is_retryable_provider_error(error: ProviderError) -> bool:
+    cause = error.__cause__
+    if isinstance(cause, (requests.ConnectionError, requests.Timeout)):
+        return True
+    status_code = provider_status_code(cause)
+    return status_code == 429 or (status_code is not None and 500 <= status_code <= 599)
+
+
+def retry_delay_seconds(error: ProviderError, default_delay: float) -> float:
+    if provider_status_code(error.__cause__) != 429:
+        return default_delay
+    retry_after = provider_retry_after(error.__cause__)
+    if retry_after is None:
+        return default_delay
+    return retry_after
+
+
+def provider_status_code(exc: BaseException | None) -> int | None:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None) or getattr(exc, "status_code", None)
+    try:
+        return int(status_code)
+    except (TypeError, ValueError):
+        return None
+
+
+def provider_retry_after(exc: BaseException | None) -> float | None:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    value = headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
 
 
 @dataclass(frozen=True)

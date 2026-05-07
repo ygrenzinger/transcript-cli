@@ -132,10 +132,14 @@ def enforce_gaps(cues: list[Cue]) -> list[Cue]:
         target_start = current.end_ms + MIN_GAP_MS
         if nxt.end_ms - target_start >= MIN_DURATION_MS:
             result[i + 1] = replace(nxt, start_ms=target_start)
+            continue
+        if nxt.start_ms < current.end_ms:
+            result[i] = replace(current, end_ms=max(current.start_ms + 1, nxt.start_ms))
     return result
 
 
 def standardize_cues(cues: list[Cue]) -> list[Cue]:
+    cues = [cue for cue in cues if cue.end_ms > cue.start_ms]
     cues = split_embedded_speaker_changes(cues)
     multi_speaker = len({cue.speaker for cue in cues if cue.speaker}) >= 2
     standardized: list[Cue] = []
