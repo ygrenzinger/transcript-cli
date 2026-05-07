@@ -30,6 +30,16 @@ Voxtral transcription requires:
 export MISTRAL_API_KEY="..."
 ```
 
+Vertex Gemini transcription requires Google Application Default Credentials and Vertex AI project configuration:
+
+```bash
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"
+```
+
+The `vertex-gemini` provider uses Vertex AI Gemini with `gemini-2.5-flash` by default. It also supports `gemini-2.5-pro` via `--model gemini-2.5-pro`. Its subtitle timestamps are model-derived and approximate, because Gemini is used as a multimodal generative model rather than a dedicated speech-to-text API with native word timings.
+
 ## Full Video Pipeline
 
 Extract audio and transcribe in one command:
@@ -42,6 +52,18 @@ Use Voxtral instead:
 
 ```bash
 uv run video-to-srt --provider voxtral "/path/to/video.mkv"
+```
+
+Use Vertex Gemini instead:
+
+```bash
+uv run video-to-srt --provider vertex-gemini "/path/to/video.mkv"
+```
+
+Use Vertex Gemini Pro instead:
+
+```bash
+uv run video-to-srt --provider vertex-gemini --model gemini-2.5-pro "/path/to/video.mkv"
 ```
 
 Specify a language when supported by the provider:
@@ -64,9 +86,10 @@ uv run video-to-srt --provider voxtral --improve-subtitles --output "/path/to/ou
 
 Outputs:
 
-- Cached audio: `/path/to/video.mp3`
 - Raw provider SRT: `/path/to/video.<provider>.raw.srt`
 - Improved SRT, when requested: `/path/to/video.<provider>.improved.srt`
+
+The extracted audio file is removed after successful raw SRT creation.
 
 ## Direct Script Usage
 

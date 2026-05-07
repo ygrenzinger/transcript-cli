@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -26,7 +27,7 @@ class TranscriptionProvider(Protocol):
     name: str
     models: dict[str, str]
     default_model: str
-    env_var: str
+    required_env_vars: tuple[str, ...]
 
     def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
         ...
@@ -100,7 +101,7 @@ class VoxtralProvider:
     name: str = "voxtral"
     models: dict[str, str] = None  # type: ignore[assignment]
     default_model: str = "voxtral-mini-2602"
-    env_var: str = "MISTRAL_API_KEY"
+    required_env_vars: tuple[str, ...] = ("MISTRAL_API_KEY",)
 
     def __post_init__(self) -> None:
         if self.models is None:
@@ -108,7 +109,7 @@ class VoxtralProvider:
 
     def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
         model_id = resolve_model(self, model)
-        api_key = require_env(self.env_var)
+        api_key = require_env("MISTRAL_API_KEY")
         try:
             from mistralai import Mistral  # type: ignore
         except ImportError:
@@ -156,7 +157,7 @@ class GrokProvider:
     name: str = "grok"
     models: dict[str, str] = None  # type: ignore[assignment]
     default_model: str = "grok-transcribe-1"
-    env_var: str = "XAI_API_KEY"
+    required_env_vars: tuple[str, ...] = ("XAI_API_KEY",)
     stt_url: str = "https://api.x.ai/v1/stt"
 
     def __post_init__(self) -> None:
@@ -165,7 +166,7 @@ class GrokProvider:
 
     def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
         model_id = resolve_model(self, model)
-        api_key = require_env(self.env_var)
+        api_key = require_env("XAI_API_KEY")
         data: dict[str, str] = {"model": model_id, "response_format": "verbose_json", "timestamp_granularities[]": "word"}
         if language:
             data["language"] = language
@@ -246,9 +247,157 @@ def _cue_from_words(index: int, words: list[dict]) -> Cue:
     )
 
 
+VERTEX_GEMINI_PROMPT = """Transcribe the audio into subtitle-ready segments.
+
+Return only JSON matching this shape:
+{
+  "segments": [
+    {"start": 0.0, "end": 2.4, "text": "spoken text"}
+  ]
+}
+
+Rules:
+- Use seconds as numbers for start and end.
+- Preserve the spoken language; do not translate.
+- Do not summarize or omit speech.
+- Keep segments short enough for subtitles.
+- Return valid JSON only, with no markdown.
+"""
+
+VERTEX_GEMINI_RESPONSE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "number"},
+                    "end": {"type": "number"},
+                    "text": {"type": "string"},
+                },
+                "required": ["start", "end", "text"],
+            },
+        }
+    },
+    "required": ["segments"],
+}
+
+
+@dataclass(frozen=True)
+class VertexGeminiProvider:
+    name: str = "vertex-gemini"
+    models: dict[str, str] = None  # type: ignore[assignment]
+    default_model: str = "gemini-2.5-flash"
+    required_env_vars: tuple[str, ...] = ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION")
+
+    def __post_init__(self) -> None:
+        if self.models is None:
+            object.__setattr__(
+                self,
+                "models",
+                {
+                    "gemini-2.5-flash": "gemini-2.5-flash",
+                    "gemini-2.5-pro": "gemini-2.5-pro",
+                },
+            )
+
+    def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
+        model_id = resolve_model(self, model)
+        project = require_env("GOOGLE_CLOUD_PROJECT")
+        location = require_env("GOOGLE_CLOUD_LOCATION")
+        try:
+            from google import genai  # type: ignore
+            from google.genai import types  # type: ignore
+        except ImportError as exc:
+            raise ProviderError("vertex-gemini requires the google-genai package") from exc
+
+        prompt = VERTEX_GEMINI_PROMPT
+        if language:
+            prompt += f"\n- The caller supplied language hint: {language}."
+        try:
+            client = genai.Client(vertexai=True, project=project, location=location)
+            response = client.models.generate_content(
+                model=model_id,
+                contents=[
+                    types.Part.from_bytes(data=audio_path.read_bytes(), mime_type="audio/mp3"),
+                    prompt,
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_json_schema=VERTEX_GEMINI_RESPONSE_SCHEMA,
+                ),
+            )
+        except Exception as exc:  # Google SDK exception shapes vary by auth/transport/API failure.
+            raise ProviderError(f"vertex-gemini transcription failed: {exc}") from exc
+
+        atomic_write_srt(output_path, vertex_gemini_response_to_cues(response))
+
+
+def vertex_gemini_response_to_cues(response: object) -> list[Cue]:
+    text = str(getattr(response, "text", "") or "").strip()
+    if not text:
+        parsed = getattr(response, "parsed", None)
+        if parsed is not None:
+            return vertex_gemini_result_to_cues(_json_compatible(parsed))
+        raise ProviderError("vertex-gemini returned no transcription text")
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ProviderError("vertex-gemini transcription response was not JSON") from exc
+    return vertex_gemini_result_to_cues(result)
+
+
+def _json_compatible(value: object) -> object:
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "dict"):
+        return value.dict()
+    return value
+
+
+def vertex_gemini_result_to_cues(result: object) -> list[Cue]:
+    if not isinstance(result, dict):
+        raise ProviderError("vertex-gemini transcription response had unexpected shape")
+    segments = result.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise ProviderError("vertex-gemini returned no timestamped transcription segments")
+
+    cues: list[Cue] = []
+    previous_start_ms = -1
+    for segment in segments:
+        if not isinstance(segment, dict):
+            raise ProviderError("vertex-gemini transcription segment had unexpected shape")
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            continue
+        start_ms = _vertex_gemini_timestamp_ms(segment, "start")
+        end_ms = _vertex_gemini_timestamp_ms(segment, "end")
+        if end_ms <= start_ms:
+            raise ProviderError("vertex-gemini returned a non-positive-duration segment")
+        if start_ms < previous_start_ms:
+            raise ProviderError("vertex-gemini returned out-of-order segments")
+        previous_start_ms = start_ms
+        cues.append(Cue(index=len(cues) + 1, start_ms=start_ms, end_ms=end_ms, text=text))
+
+    if not cues:
+        raise ProviderError("vertex-gemini returned no transcription text")
+    return cues
+
+
+def _vertex_gemini_timestamp_ms(segment: dict[str, object], key: str) -> int:
+    try:
+        return round(float(segment[key]) * 1000)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProviderError(f"vertex-gemini returned a segment with invalid {key} timestamp") from exc
+
+
 PROVIDERS: dict[str, TranscriptionProvider] = {
     "voxtral": VoxtralProvider(),
     "grok": GrokProvider(),
+    "vertex-gemini": VertexGeminiProvider(),
 }
 
 
@@ -277,10 +426,16 @@ def require_env(name: str) -> str:
     return value
 
 
+def validate_required_env_vars(provider: TranscriptionProvider, get_env: Callable[[str], str | None] = os.environ.get) -> None:
+    for name in provider.required_env_vars:
+        if not get_env(name):
+            raise ProviderError(f"missing required environment variable: {name}")
+
+
 def validate_provider_ready(provider_name: str, model: str | None) -> TranscriptionProvider:
     provider = get_provider(provider_name)
     resolve_model(provider, model)
-    require_env(provider.env_var)
+    validate_required_env_vars(provider)
     return provider
 
 

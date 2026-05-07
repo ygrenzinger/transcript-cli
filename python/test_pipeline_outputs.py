@@ -14,7 +14,7 @@ class FakeProvider:
     name: str = "fake"
     models: dict[str, str] = None  # type: ignore[assignment]
     default_model: str = "fake-model"
-    env_var: str = "FAKE_API_KEY"
+    required_env_vars: tuple[str, ...] = ("FAKE_API_KEY",)
 
     def __post_init__(self) -> None:
         if self.models is None:
@@ -72,8 +72,20 @@ class PipelineOutputTests(unittest.TestCase):
             self.assertTrue(video.with_suffix(".mp3").exists())
             self.assertFalse(video.with_suffix(".fake.raw.srt").exists())
 
-    def _stub_pipeline(self, video: Path, transcribe_failure: bool = False) -> None:
-        provider = FakeProvider()
+    def test_vertex_gemini_pipeline_uses_provider_name_for_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video = Path(tmpdir) / "clip.mp4"
+            video.write_bytes(b"video")
+            self._stub_pipeline(video, provider=FakeProvider(name="vertex-gemini", default_model="gemini-2.5-flash"))
+
+            output = transcribe.run_pipeline(video, "vertex-gemini", None, None, True)
+
+            self.assertEqual(video.with_suffix(".vertex-gemini.improved.srt"), output)
+            self.assertTrue(video.with_suffix(".vertex-gemini.raw.srt").exists())
+            self.assertFalse(video.with_suffix(".mp3").exists())
+
+    def _stub_pipeline(self, video: Path, transcribe_failure: bool = False, provider: FakeProvider | None = None) -> None:
+        provider = provider or FakeProvider()
 
         def extract_audio(_: Path) -> Path:
             audio = video.with_suffix(".mp3")

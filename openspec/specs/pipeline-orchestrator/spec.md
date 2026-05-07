@@ -2,9 +2,7 @@
 
 ## Purpose
 Compose the lower-level capabilities (`audio-extraction`, `audio-to-srt-transcription`, optional `subtitle-improvement`, and `srt-validation` for improved output) into a single end-to-end pipeline that turns a video file into provider-specific SRT artifacts. The orchestrator is the only component that knows the order of stages and how they are wired; each stage remains independently swappable. This is what gives the user a one-command experience while still letting them choose which transcription provider/model to use.
-
 ## Requirements
-
 ### Requirement: End-to-end pipeline
 Given a video path and a chosen provider, the orchestrator SHALL execute audio extraction and audio-to-SRT transcription via the selected provider. The raw transcription output SHALL be written next to the source video as `<video>.<provider>.raw.srt`. If subtitle improvement is requested, the orchestrator SHALL additionally run subtitle improvement and write `<video>.<provider>.improved.srt`.
 
@@ -23,13 +21,14 @@ Given a video path and a chosen provider, the orchestrator SHALL execute audio e
 - AND the improved file passes `srt-validation`
 
 ### Requirement: Provider and model selection
-The orchestrator SHALL expose a `--provider` option (or equivalent) to select between registered transcription providers (e.g. `voxtral`, `grok`) and a `--model` option for providers that expose model selection. Defaults SHALL be documented and stable. The `voxtral` provider SHALL expose exactly one supported model, `voxtral-mini-2602`, and SHALL use it by default.
+The orchestrator SHALL expose a `--provider` option (or equivalent) to select between registered transcription providers (e.g. `voxtral`, `grok`, `vertex-gemini`) and a `--model` option for providers that expose model selection. Defaults SHALL be documented and stable. The `voxtral` provider SHALL expose exactly one supported model, `voxtral-mini-2602`, and SHALL use it by default. The `vertex-gemini` provider SHALL expose `gemini-2.5-flash` and `gemini-2.5-pro`, and SHALL use `gemini-2.5-flash` by default.
 
 #### Scenario: Switch provider
-- GIVEN providers `voxtral` and `grok` are registered
+- GIVEN providers `voxtral`, `grok`, and `vertex-gemini` are registered
 - WHEN the user runs the pipeline with `--provider grok`
 - THEN the Grok-backed provider is used for the transcription stage
 - AND switching to `--provider voxtral` re-runs the same audio through the Voxtral-backed provider
+- AND switching to `--provider vertex-gemini` re-runs the same audio through the Vertex Gemini-backed provider
 
 #### Scenario: Voxtral default model
 - GIVEN provider `voxtral` is selected
@@ -40,6 +39,21 @@ The orchestrator SHALL expose a `--provider` option (or equivalent) to select be
 - GIVEN provider `voxtral` is selected
 - WHEN the user runs the pipeline with `--provider voxtral --model voxtral-mini-2602`
 - THEN the pipeline uses `voxtral-mini-2602`
+
+#### Scenario: Vertex Gemini default model
+- GIVEN provider `vertex-gemini` is selected
+- WHEN the user omits `--model`
+- THEN the pipeline uses `gemini-2.5-flash`
+
+#### Scenario: Explicit Vertex Gemini model
+- GIVEN provider `vertex-gemini` is selected
+- WHEN the user runs the pipeline with `--provider vertex-gemini --model gemini-2.5-flash`
+- THEN the pipeline uses `gemini-2.5-flash`
+
+#### Scenario: Explicit Vertex Gemini Pro model
+- GIVEN provider `vertex-gemini` is selected
+- WHEN the user runs the pipeline with `--provider vertex-gemini --model gemini-2.5-pro`
+- THEN the pipeline uses `gemini-2.5-pro`
 
 #### Scenario: Unknown provider or model
 - GIVEN a provider or model name that is not registered
@@ -60,6 +74,12 @@ Each stage SHALL be invoked through a stable interface that does not depend on t
 - WHEN the user selects it via `--provider`
 - THEN it is invoked through the same provider interface
 - AND optional subtitle improvement processes its raw SRT output unchanged
+
+#### Scenario: Add Vertex Gemini without orchestrator-specific provider logic
+- GIVEN provider `vertex-gemini` is registered by the transcription capability
+- WHEN the user selects it via `--provider vertex-gemini`
+- THEN the orchestrator invokes it through the shared provider interface
+- AND the orchestrator does not contain Vertex-specific API, authentication, prompt, or response parsing logic
 
 ### Requirement: Validation gate
 The orchestrator SHALL validate improved subtitle output before declaring the improvement step successful. The orchestrator SHALL NOT require strict raw SRT validation before subtitle improvement, because subtitle improvement is responsible for tolerating provider artifacts such as non-positive-duration cues that can be safely removed.
@@ -124,7 +144,7 @@ Intermediate files SHALL be managed by the orchestrator according to their lifec
 - AND extracted audio from each successful run is removed after that run's raw SRT is created
 
 ### Requirement: Single-command UX
-The orchestrator SHALL be invocable with a single command requiring only the video path and credentials in environment variables. No interactive prompts or manual file shuffling SHALL be required. Subtitle improvement SHALL be enabled with an explicit CLI option or equivalent non-interactive configuration.
+The orchestrator SHALL be invocable with a single command requiring only the video path and credentials or provider-specific configuration in environment variables. No interactive prompts or manual file shuffling SHALL be required. Subtitle improvement SHALL be enabled with an explicit CLI option or equivalent non-interactive configuration.
 
 #### Scenario: One-shot raw run
 - GIVEN a video and the required API key set in the environment
@@ -132,12 +152,18 @@ The orchestrator SHALL be invocable with a single command requiring only the vid
 - THEN a raw provider SRT file is produced next to the video without further interaction
 
 #### Scenario: One-shot improved run
-- GIVEN a video and the required API key set in the environment
-- WHEN the user runs the orchestrator with the video and the subtitle-improvement option
+- GIVEN a video and the subtitle-improvement option
+- WHEN the user runs the orchestrator with the required provider configuration in the environment
 - THEN a raw provider SRT file and an improved SRT file are produced next to the video without further interaction
 
 #### Scenario: Missing credentials
-- GIVEN the required API key environment variable is not set
+- GIVEN the selected provider's required configuration is not set
 - WHEN the user runs the orchestrator
 - THEN it exits with a non-zero status before any stage runs
-- AND the error names the missing environment variable
+- AND the error names the missing configuration value
+
+#### Scenario: One-shot Vertex Gemini run
+- GIVEN a video, valid Google Application Default Credentials, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION`
+- WHEN the user runs the orchestrator with `--provider vertex-gemini`
+- THEN a raw Vertex Gemini SRT file is produced next to the video without further interaction
+
