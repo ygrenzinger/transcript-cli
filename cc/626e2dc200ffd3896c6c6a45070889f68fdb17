@@ -1,0 +1,31 @@
+python/test_pipeline_outputs.py
+  s_4f82de05e0267d::t_61663b74355e56 47,61,63-75,84-85
+openspec/specs/pipeline-orchestrator/spec.md
+  s_5db77ebab2d339::t_440fc5c79bcf98 105,107-117,124
+python/transcribe.py
+  s_4f82de05e0267d::t_344ada81686cb1 89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "cc626e2dc200ffd3896c6c6a45070889f68fdb17",
+  "prompts": {},
+  "sessions": {
+    "s_4f82de05e0267d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fe418081ffeXHiF0O61fougH8",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_5db77ebab2d339": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fe310df0ffe27FylK6znQllN8",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
