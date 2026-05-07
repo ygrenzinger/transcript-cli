@@ -1,0 +1,50 @@
+python/improve_subtitles.py
+  s_518ea869cb0a0f::t_671b707f7f1f4e 141,145,149-153,191,194,199,205
+python/transcribe.py
+  s_518ea869cb0a0f::t_671b707f7f1f4e 15,25,66,72-73,76,85,90-92,94-96,98,102,107-108,111-113,119-126
+python/test_pipeline_outputs.py
+  s_518ea869cb0a0f::t_14cc1d3aab5096 1-81
+python/README.md
+  s_518ea869cb0a0f::t_14cc1d3aab5096 3,35,53,56-62,69,78-82
+openspec/specs/audio-to-srt-transcription/spec.md
+  s_f763149f1c487a::t_480b430d99b7f8 23-54
+openspec/specs/pipeline-orchestrator/spec.md
+  s_f7b833600d0b3f::t_f2ef2b3ed03387 4,9-23,51,54,56,61-62,65,67-71,73-75,77,80-86,88-89,91-92,101,105,110-118,121,123,126-131
+openspec/specs/subtitle-improvement/spec.md
+  s_f7b833600d0b3f::t_f2ef2b3ed03387 1,4,8-16,18,22-23,28-30,33,37-38,42-43,45-46,48-51,54,58-60,64,68,72,76-78,81,85,89,93-95,98,101-102,107,111,114-115,119,122
+python/pyproject.toml
+  s_518ea869cb0a0f::t_14cc1d3aab5096 13
+  s_518ea869cb0a0f::t_671b707f7f1f4e 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "f0d029fbf15e687696f2e99e51fb44afd0ff3bd1",
+  "prompts": {},
+  "sessions": {
+    "s_518ea869cb0a0f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fe94bc99ffeK8wuWerTCgCysf",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_f763149f1c487a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fe55259effe2jNJPcBW138feG",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_f7b833600d0b3f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fe534dbaffeffCIk6llDTic5H",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
