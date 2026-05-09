@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
+from urllib.parse import urlparse
 
 from extract_audio import extract_audio
 from providers import ProviderError, resolve_model, transcribe_with_retries, validate_provider_ready
@@ -16,6 +19,8 @@ from improve_subtitles import improve_subtitles
 from validate_srt import validate_srt
 
 T = TypeVar("T")
+
+YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,69 @@ def run_stage(stage: PipelineStage, action: Callable[[], T], **done_context: obj
         raise
     emit_progress(stage, "DONE", **done_context)
     return result
+
+
+def is_http_url(source: str) -> bool:
+    return urlparse(source).scheme in {"http", "https"}
+
+
+def is_youtube_url(source: str) -> bool:
+    parsed = urlparse(source)
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme in {"http", "https"} and host in YOUTUBE_HOSTS
+
+
+def download_youtube_video(url: str, download_dir: Path | None = None) -> Path:
+    executable = shutil.which("yt-dlp")
+    if executable is None:
+        raise RuntimeError("yt-dlp is required for YouTube URLs")
+
+    target_dir = download_dir or Path.cwd()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    output_template = "%(title).200B [%(id)s].%(ext)s"
+    command = [
+        executable,
+        "--no-playlist",
+        "--paths",
+        str(target_dir),
+        "-o",
+        output_template,
+        "--print",
+        "after_move:filepath",
+        url,
+    ]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = "YouTube download failed"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+
+    downloaded_paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(downloaded_paths) != 1:
+        raise RuntimeError("YouTube download failed: yt-dlp did not report exactly one downloaded file")
+
+    downloaded = Path(downloaded_paths[0])
+    if not downloaded.is_absolute():
+        downloaded = target_dir / downloaded
+    if not downloaded.exists():
+        raise RuntimeError(f"YouTube download failed: downloaded file not found: {downloaded}")
+    return downloaded
+
+
+def resolve_input_source(input_source: str | Path) -> Path:
+    source = str(input_source)
+    if is_youtube_url(source):
+        return download_youtube_video(source)
+    if is_http_url(source):
+        raise RuntimeError("only local video files and YouTube URLs are supported")
+
+    video_path = Path(input_source)
+    if not video_path.exists():
+        raise RuntimeError(f"file not found: {video_path}")
+    return video_path
 
 
 def run_pipeline(
@@ -100,8 +168,8 @@ def run_pipeline(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Turn a video file into raw or improved SRT subtitles.")
-    parser.add_argument("video_file", type=Path)
+    parser = argparse.ArgumentParser(description="Turn a local video file or YouTube URL into raw or improved SRT subtitles.")
+    parser.add_argument("input_source")
     parser.add_argument("--provider", default="voxtral")
     parser.add_argument("--model")
     parser.add_argument("--language")
@@ -112,13 +180,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.output and not args.improve_subtitles:
         parser.error("--output requires --improve-subtitles")
 
-    if not args.video_file.exists():
-        print(f"Error: file not found: {args.video_file}", file=sys.stderr)
-        return 1
-
     try:
+        video_path = resolve_input_source(args.input_source)
         output = run_pipeline(
-            args.video_file,
+            video_path,
             args.provider,
             args.model,
             args.language,

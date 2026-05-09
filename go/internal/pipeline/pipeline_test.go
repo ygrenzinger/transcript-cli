@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,5 +76,63 @@ func TestPipelineRawImprovedFailureAndProgress(t *testing.T) {
 	}
 	if _, err := os.Stat(strings.TrimSuffix(video, filepath.Ext(video)) + ".mp3"); err != nil {
 		t.Fatal("audio should be retained on transcription failure")
+	}
+}
+
+func TestPipelineResolvesInputSourceBeforeExtraction(t *testing.T) {
+	dir := t.TempDir()
+	downloaded := filepath.Join(dir, "downloaded.webm")
+	if err := os.WriteFile(downloaded, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := []string{}
+	r := provider.NewRegistry()
+	r.Register(fakeProvider{name: "fake", calls: &calls})
+	out, err := Run(context.Background(), Options{VideoPath: "https://youtu.be/abc123", Provider: "fake"}, Dependencies{
+		Registry: r,
+		Stderr:   &strings.Builder{},
+		Resolve: func(ctx context.Context, input string) (string, error) {
+			calls = append(calls, "resolve:"+input)
+			return downloaded, nil
+		},
+		Audio: func(ctx context.Context, video, output string) (string, error) {
+			calls = append(calls, "extract:"+video)
+			audio := strings.TrimSuffix(video, filepath.Ext(video)) + ".mp3"
+			return audio, os.WriteFile(audio, []byte("mp3"), 0o644)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "downloaded.fake.raw.srt"); out != want {
+		t.Fatalf("out=%q want=%q", out, want)
+	}
+	wantCalls := []string{"resolve:https://youtu.be/abc123", "extract:" + downloaded, "transcribe"}
+	if strings.Join(calls, "|") != strings.Join(wantCalls, "|") {
+		t.Fatalf("calls=%v want=%v", calls, wantCalls)
+	}
+}
+
+func TestPipelineStopsWhenInputSourceResolutionFails(t *testing.T) {
+	want := errors.New("YouTube download failed")
+	calls := []string{}
+	r := provider.NewRegistry()
+	r.Register(fakeProvider{name: "fake", calls: &calls})
+	_, err := Run(context.Background(), Options{VideoPath: "https://youtu.be/abc123", Provider: "fake", Improve: true}, Dependencies{
+		Registry: r,
+		Stderr:   &strings.Builder{},
+		Resolve: func(ctx context.Context, input string) (string, error) {
+			return "", want
+		},
+		Audio: func(ctx context.Context, video, output string) (string, error) {
+			calls = append(calls, "extract")
+			return "", nil
+		},
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("expected resolver error, got %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("downstream stages should not run, calls=%v", calls)
 	}
 }

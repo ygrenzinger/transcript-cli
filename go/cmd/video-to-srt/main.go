@@ -34,19 +34,15 @@ func run(argv []string) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "Error: missing video file")
+		fmt.Fprintln(os.Stderr, "Error: missing input source")
 		return 1
 	}
 	if *output != "" && !*improveFlag {
 		fmt.Fprintln(os.Stderr, "Error: --output requires --improve-subtitles")
 		return 1
 	}
-	video := fs.Arg(0)
-	if _, err := os.Stat(video); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: file not found: %s\n", video)
-		return 1
-	}
-	out, err := pipeline.Run(context.Background(), pipeline.Options{VideoPath: video, Provider: *providerName, Model: *model, Language: *language, Improve: *improveFlag, Output: *output}, pipeline.Dependencies{})
+	input := fs.Arg(0)
+	out, err := pipeline.Run(context.Background(), pipeline.Options{VideoPath: input, Provider: *providerName, Model: *model, Language: *language, Improve: *improveFlag, Output: *output}, pipeline.Dependencies{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		return 1

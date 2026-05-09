@@ -8,6 +8,7 @@
 | `audio-to-srt-transcription` Grok | `internal/provider.GrokProvider` | `provider_test.go` | Direct HTTP implementation and cue conversion covered |
 | `audio-to-srt-transcription` Vertex Gemini | `internal/provider.VertexGeminiProvider` | `provider_test.go` | Client boundary and response parsing covered; operational path uses Python reference bridge when no Go client is injected |
 | `audio-to-srt-transcription` Sherpa Parakeet | `internal/provider.SherpaParakeetProvider` | `provider_test.go` | Cache, audio prep, runtime candidate, token/segment conversion covered; operational path uses Python reference bridge when no Go runtime is injected |
+| `video-source-ingestion` | `internal/source`, `internal/pipeline`, `cmd/video-to-srt` | `internal/source/source_test.go`, `internal/pipeline/pipeline_test.go` | local path resolution, YouTube URL download boundary, unsupported URL rejection, resolver failure stopping downstream stages |
 | `pipeline-orchestrator` | `internal/pipeline`, `cmd/video-to-srt` | `internal/pipeline/pipeline_test.go` | stage order, artifacts, progress, cleanup, failure behavior |
 | `srt-validation` | `internal/srt` | `internal/srt/srt_test.go` | parseability, timestamps, encoding, indices, overlap, pure validation |
 | `subtitle-improvement` | `internal/improve` | `internal/improve/improve_test.go` | invalid cue filtering, splitting, CPS/gap behavior, speaker labels, idempotence |

@@ -11,6 +11,7 @@ import (
 	"video-to-srt/internal/audio"
 	"video-to-srt/internal/improve"
 	"video-to-srt/internal/provider"
+	"video-to-srt/internal/source"
 	"video-to-srt/internal/srt"
 )
 
@@ -26,6 +27,7 @@ type Options struct {
 type Dependencies struct {
 	Registry *provider.Registry
 	Audio    func(context.Context, string, string) (string, error)
+	Resolve  func(context.Context, string) (string, error)
 	Sleep    provider.Sleeper
 	Stderr   io.Writer
 }
@@ -39,10 +41,20 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rawSRT := withProviderSuffix(opts.VideoPath, selected.Metadata().Name, "raw")
+	resolve := deps.Resolve
+	if resolve == nil {
+		resolve = func(ctx context.Context, input string) (string, error) {
+			return source.Resolve(ctx, input, nil)
+		}
+	}
+	videoPath, err := resolve(ctx, opts.VideoPath)
+	if err != nil {
+		return "", err
+	}
+	rawSRT := withProviderSuffix(videoPath, selected.Metadata().Name, "raw")
 	improvedSRT := opts.Output
 	if improvedSRT == "" {
-		improvedSRT = withProviderSuffix(opts.VideoPath, selected.Metadata().Name, "improved")
+		improvedSRT = withProviderSuffix(videoPath, selected.Metadata().Name, "improved")
 	}
 	total := 2
 	if opts.Improve {
@@ -58,9 +70,9 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (string, error) {
 			return audio.Extract(ctx, video, output, nil)
 		}
 	}
-	audioPath, err := runStage(stderr, Stage{1, total, "extract_audio", map[string]any{"input": opts.VideoPath}}, func() (string, error) {
-		return extract(ctx, opts.VideoPath, "")
-	}, map[string]any{"artifact": audio.DefaultOutputPath(opts.VideoPath)})
+	audioPath, err := runStage(stderr, Stage{1, total, "extract_audio", map[string]any{"input": videoPath}}, func() (string, error) {
+		return extract(ctx, videoPath, "")
+	}, map[string]any{"artifact": audio.DefaultOutputPath(videoPath)})
 	if err != nil {
 		return "", err
 	}

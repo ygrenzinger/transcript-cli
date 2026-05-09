@@ -5,7 +5,7 @@ This directory contains the Go reimplementation of the Python `video-to-srt` too
 ## Setup
 
 - Go: latest stable release, module target `go 1.23`.
-- External tool: `ffmpeg` must be installed and available on `PATH` for audio extraction and Sherpa audio preparation.
+- External tools: `ffmpeg` must be installed and available on `PATH` for audio extraction and Sherpa audio preparation; `yt-dlp` is required when the input source is a YouTube URL.
 - Test: `go test ./...`
 - Build: `go build ./cmd/video-to-srt`
 
@@ -13,12 +13,13 @@ This directory contains the Go reimplementation of the Python `video-to-srt` too
 
 ```sh
 go run ./cmd/video-to-srt --provider voxtral path/to/clip.mp4
+go run ./cmd/video-to-srt --provider voxtral 'https://www.youtube.com/watch?v=abc123'
 go run ./cmd/video-to-srt --provider grok --language fr --improve-subtitles path/to/clip.mp4
 go run ./cmd/video-to-srt --provider vertex-gemini --model gemini-2.5-pro --improve-subtitles -o path/to/custom.srt path/to/clip.mp4
 go run ./cmd/video-to-srt providers
 ```
 
-Outputs match the Python naming contract:
+The positional input can be an existing local video path or a supported YouTube URL. URL inputs are downloaded first, then outputs use the downloaded video's path. Outputs match the Python naming contract:
 
 - Raw SRT: `<video>.<provider>.raw.srt`
 - Improved SRT: `<video>.<provider>.improved.srt`, or `--output` when `--improve-subtitles` is set

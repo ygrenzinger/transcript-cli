@@ -1,10 +1,10 @@
 # pipeline-orchestrator Specification
 
 ## Purpose
-Compose the lower-level capabilities (`audio-extraction`, `audio-to-srt-transcription`, optional `subtitle-improvement`, and `srt-validation` for improved output) into a single end-to-end pipeline that turns a video file into provider-specific SRT artifacts. The orchestrator is the only component that knows the order of stages and how they are wired; each stage remains independently swappable. This is what gives the user a one-command experience while still letting them choose which transcription provider/model to use.
+Compose the lower-level capabilities (`video-source-ingestion`, `audio-extraction`, `audio-to-srt-transcription`, optional `subtitle-improvement`, and `srt-validation` for improved output) into a single end-to-end pipeline that turns an input source into provider-specific SRT artifacts. The orchestrator is the only component that knows the order of stages and how they are wired; each stage remains independently swappable. This is what gives the user a one-command experience while still letting them choose which transcription provider/model to use.
 ## Requirements
 ### Requirement: End-to-end pipeline
-Given a video path and a chosen provider, the orchestrator SHALL execute audio extraction and audio-to-SRT transcription via the selected provider. The raw transcription output SHALL be written next to the source video as `<video>.<provider>.raw.srt`. If subtitle improvement is requested, the orchestrator SHALL additionally run subtitle improvement and write `<video>.<provider>.improved.srt`.
+Given an input source and a chosen provider, the orchestrator SHALL resolve the input source to a local video path, then execute audio extraction and audio-to-SRT transcription via the selected provider. The raw transcription output SHALL be written next to the resolved source video as `<video>.<provider>.raw.srt`. If subtitle improvement is requested, the orchestrator SHALL additionally run subtitle improvement and write `<video>.<provider>.improved.srt`.
 
 #### Scenario: Raw-only happy path
 - GIVEN a video at `path/to/clip.mp4`, the required API credentials in the environment, and a registered provider `voxtral`
@@ -19,6 +19,13 @@ Given a video path and a chosen provider, the orchestrator SHALL execute audio e
 - THEN it produces `path/to/clip.voxtral.raw.srt`
 - AND it produces `path/to/clip.voxtral.improved.srt`
 - AND the improved file passes `srt-validation`
+
+#### Scenario: YouTube URL happy path
+- GIVEN a supported YouTube URL, `yt-dlp` is available, the required API credentials are in the environment, and a registered provider `voxtral`
+- WHEN the orchestrator is invoked with the YouTube URL and `--provider voxtral`
+- THEN it resolves the URL to a downloaded local video path before audio extraction
+- AND it produces `<downloaded-video>.voxtral.raw.srt` next to the downloaded video
+- AND audio extraction and transcription have each been executed exactly once against the downloaded video
 
 ### Requirement: Provider and model selection
 The orchestrator SHALL expose a `--provider` option (or equivalent) to select between registered transcription providers (e.g. `voxtral`, `grok`, `vertex-gemini`) and a `--model` option for providers that expose model selection. Defaults SHALL be documented and stable. The `voxtral` provider SHALL expose exactly one supported model, `voxtral-mini-2602`, and SHALL use it by default. The `vertex-gemini` provider SHALL expose `gemini-2.5-flash` and `gemini-2.5-pro`, and SHALL use `gemini-2.5-flash` by default.
@@ -112,7 +119,15 @@ The orchestrator SHALL report the start and completion of each executed stage on
 - AND the progress total reflects all executed stages
 
 ### Requirement: Failure stops the pipeline
-If any stage exits non-zero, the orchestrator SHALL stop, propagate the non-zero status, and NOT run subsequent stages.
+If input source resolution or any later stage exits non-zero, the orchestrator SHALL stop, propagate the non-zero status, and NOT run subsequent stages.
+
+#### Scenario: YouTube download fails
+- GIVEN the input source is a supported YouTube URL
+- AND `yt-dlp` fails to download the video
+- WHEN the orchestrator handles that result
+- THEN it stops the pipeline immediately
+- AND it does not run audio extraction, transcription, validation, or subtitle improvement
+- AND it returns a non-zero status with a clear download error
 
 #### Scenario: Transcription provider fails
 - GIVEN the transcription provider exits with a non-zero status
@@ -144,17 +159,23 @@ Intermediate files SHALL be managed by the orchestrator according to their lifec
 - AND extracted audio from each successful run is removed after that run's raw SRT is created
 
 ### Requirement: Single-command UX
-The orchestrator SHALL be invocable with a single command requiring only the video path and credentials or provider-specific configuration in environment variables. No interactive prompts or manual file shuffling SHALL be required. Subtitle improvement SHALL be enabled with an explicit CLI option or equivalent non-interactive configuration.
+The orchestrator SHALL be invocable with a single command requiring only an input source and credentials or provider-specific configuration in environment variables. The input source SHALL be either a local video file path or a supported YouTube URL. No interactive prompts or manual file shuffling SHALL be required. Subtitle improvement SHALL be enabled with an explicit CLI option or equivalent non-interactive configuration.
 
-#### Scenario: One-shot raw run
+#### Scenario: One-shot local raw run
 - GIVEN a video and the required API key set in the environment
 - WHEN the user runs the orchestrator with the video as the only positional argument
 - THEN a raw provider SRT file is produced next to the video without further interaction
 
+#### Scenario: One-shot YouTube raw run
+- GIVEN a supported YouTube URL, `yt-dlp` is available, and the required API key is set in the environment
+- WHEN the user runs the orchestrator with the URL as the only positional argument
+- THEN the video is downloaded automatically
+- AND a raw provider SRT file is produced next to the downloaded video without further interaction
+
 #### Scenario: One-shot improved run
-- GIVEN a video and the subtitle-improvement option
+- GIVEN an input source and the subtitle-improvement option
 - WHEN the user runs the orchestrator with the required provider configuration in the environment
-- THEN a raw provider SRT file and an improved SRT file are produced next to the video without further interaction
+- THEN a raw provider SRT file and an improved SRT file are produced without further interaction
 
 #### Scenario: Missing credentials
 - GIVEN the selected provider's required configuration is not set
