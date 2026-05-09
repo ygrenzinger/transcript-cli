@@ -1,0 +1,80 @@
+go/internal/srt/validate.go
+  s_e20d75cebe11ec::t_6a7c27e6e3a236 1-29
+go/internal/pipeline/pipeline_test.go
+  s_e20d75cebe11ec::t_622729c02b9ba3 1-13,19,31,35,38,66,79
+  s_e20d75cebe11ec::t_ff03a0d791e91d 14-18,20-30,32-34,36-37,39-65,67-78
+go/internal/pipeline/pipeline.go
+  s_e20d75cebe11ec::t_21c335d69d09de 1-56,60-112,117,122-123,128-158,165-169
+  s_e20d75cebe11ec::t_65d131cb746fc5 57-59,113-116,118-121,124-127,159-164
+go/README.md
+  s_e20d75cebe11ec::t_00caf211bd5ac1 1-30,32,35
+  s_e20d75cebe11ec::t_777438b5287db3 31,33-34,36
+go/internal/provider/provider.go
+  s_e20d75cebe11ec::t_41d37896421e66 363
+  s_e20d75cebe11ec::t_3cf7bf535c249c 478-480
+  s_e20d75cebe11ec::t_06eefb8dbbbb72 1-360,364-366,370-380,382-451,455,460-465,469-477,481-745,795-805,808,811-821
+  s_e20d75cebe11ec::t_6877631c0a4ffb 746-794
+  s_e20d75cebe11ec::t_8cdf0592ee1dc3 361-362,381
+  s_e20d75cebe11ec::t_65d131cb746fc5 367-369,452-454,456-459,466-468,806-807,809-810,822-845
+go/internal/srt/srt.go
+  s_e20d75cebe11ec::t_6a7c27e6e3a236 1-196
+go/internal/improve/improve.go
+  s_e20d75cebe11ec::t_ce13813a8d8f13 137-141,163-166
+  s_e20d75cebe11ec::t_65d131cb746fc5 13-18
+  s_e20d75cebe11ec::t_93c9b77edef27d 1-12,19-136,142-162,167-321
+go/internal/srt/atomic.go
+  s_e20d75cebe11ec::t_6a7c27e6e3a236 1-30
+go/internal/audio/audio.go
+  s_e20d75cebe11ec::t_65d131cb746fc5 12-14,16-19
+  s_e20d75cebe11ec::t_21c335d69d09de 1-11,15,20-61
+docs/go-rewrite.md
+  s_e20d75cebe11ec::t_c41913e6034bac 48,50,54,56,60,62,66,68,72,74,78,80,84,86,90,92,96,98,102,104,108,110,114,116,120,122,126,128,132,134,138,140,144,146,150,152,156,158,162,164,168,170,174,176,180,182,186,188,192,194,198,200,204,206,216,218,222,224
+  s_5c1ff61457952b::t_73cc20e5ffb597 1-47,49,51-53,55,57-59,61,63-65,67,69-71,73,75-77,79,81-83,85,87-89,91,93-95,97,99-101,103,105-107,109,111-113,115,117-119,121,123-125,127,129-131,133,135-137,139,141-143,145,147-149,151,153-155,157,159-161,163,165-167,169,171-173,175,177-179,181,183-185,187,189-191,193,195-197,199,201-203,205,207-215,217,219-221,223,225-232
+go/TRACEABILITY.md
+  s_e20d75cebe11ec::t_00caf211bd5ac1 1-6,8,11-13
+  s_e20d75cebe11ec::t_9c029bd69f25a8 7,9-10
+go/internal/improve/improve_test.go
+  s_e20d75cebe11ec::t_ce13813a8d8f13 13
+  s_e20d75cebe11ec::t_c2d13f6daf220b 1-12,15-79
+  s_e20d75cebe11ec::t_94266b659af340 14
+go/go.mod
+  s_e20d75cebe11ec::t_6a7c27e6e3a236 1-3
+go/internal/provider/provider_test.go
+  s_e20d75cebe11ec::t_ff03a0d791e91d 18-33,38-54,56-58,63,65-71,73-87,91-96,99-111,115-127,132-153,155-158,162-168,172-177,179-199
+  s_e20d75cebe11ec::t_622729c02b9ba3 1-17,34-37,55,59-62,64,72,88-90,97-98,112-114,128-131,154,159-161,169-171,178,200
+go/cmd/video-to-srt/main.go
+  s_e20d75cebe11ec::t_21c335d69d09de 1-56
+go/internal/srt/srt_test.go
+  s_e20d75cebe11ec::t_c2d13f6daf220b 1-95
+go/internal/audio/audio_test.go
+  s_e20d75cebe11ec::t_622729c02b9ba3 1-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "fe595464ca095d7c564a53c567592135404c8117",
+  "prompts": {},
+  "humans": {
+    "h_1a3147ea652b40": {
+      "author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_5c1ff61457952b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fd07bc3cffeClPHIdnSBchMMx",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_e20d75cebe11ec": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1fc788e4fffenxaNmAeIyV3Ags",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
