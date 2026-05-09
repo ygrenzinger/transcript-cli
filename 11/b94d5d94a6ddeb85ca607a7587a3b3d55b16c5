@@ -1,0 +1,65 @@
+openspec/specs/pipeline-orchestrator/spec.md
+  s_c2cf5e63312b15::t_377fd54448bd09 4,7,23-29,122-130,162,164,169-174,176,178
+go/internal/source/source_test.go
+  s_9aaf464de536e2::t_0a78c41f88f584 1-77
+python/test_pipeline_outputs.py
+  s_ea49f3e4079628::t_c21a613214cd77 30-32,39-41,93-155
+go/internal/pipeline/pipeline_test.go
+  s_9aaf464de536e2::t_c7361c338ce69e 5,81-136
+.gitignore
+  h_1a3147ea652b40 1
+python/transcribe.py
+  s_ea49f3e4079628::t_1b55e943697652 6-7,13,23-24,66-128,171-172,184,186
+go/README.md
+  s_9aaf464de536e2::t_bd463cacb2d305 8,16,22
+go/.gitignore
+  h_1a3147ea652b40 1
+go/TRACEABILITY.md
+  s_9aaf464de536e2::t_bd463cacb2d305 11
+go/cmd/video-to-srt/main.go
+  s_9aaf464de536e2::t_b85ccd4c11ad72 37,44-45
+openspec/specs/video-source-ingestion/spec.md
+  s_c2cf5e63312b15::t_377fd54448bd09 1-61
+go/internal/source/source.go
+  s_9aaf464de536e2::t_2abfd3fe0499c3 49,53-56
+  s_9aaf464de536e2::t_0a78c41f88f584 1-48,50-52,57-78
+go/internal/pipeline/pipeline.go
+  s_9aaf464de536e2::t_fd459dcfe4ee9f 14,30,44-54,57,73-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "11b94d5d94a6ddeb85ca607a7587a3b3d55b16c5",
+  "prompts": {},
+  "humans": {
+    "h_1a3147ea652b40": {
+      "author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_9aaf464de536e2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f1d8932affegdNRJvGpOiMXjx",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_c2cf5e63312b15": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f1d762b2ffeMR4ouiDuwl5RAO",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    },
+    "s_ea49f3e4079628": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f1ff19acffeGBBUXo6t5B6def",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
