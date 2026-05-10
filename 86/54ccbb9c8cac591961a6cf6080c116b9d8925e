@@ -1,0 +1,27 @@
+go/internal/provider/provider.go
+  s_9aaf464de536e2::t_2b3653afe04d25 483,581
+  s_9aaf464de536e2::t_e58a9d5835d7e9 64,355-358,364-465
+go/README.md
+  s_9aaf464de536e2::t_95424fc91051c8 32,34-35,37
+go/TRACEABILITY.md
+  s_9aaf464de536e2::t_95424fc91051c8 7,9-10
+go/internal/provider/provider_test.go
+  s_9aaf464de536e2::t_8b8f2dc0294727 171-176
+  s_9aaf464de536e2::t_50f5c759410d79 130-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "8654ccbb9c8cac591961a6cf6080c116b9d8925e",
+  "prompts": {},
+  "sessions": {
+    "s_9aaf464de536e2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f1d8932affegdNRJvGpOiMXjx",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
