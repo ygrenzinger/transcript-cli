@@ -29,9 +29,9 @@ Progress is emitted to stderr as `PROGRESS` lines with `stage`, `name`, `status`
 
 ## Providers
 
-- `voxtral`: default model `voxtral-mini-2602`, requires `MISTRAL_API_KEY`, invoked through the Python reference provider bridge.
+- `voxtral`: default model `voxtral-mini-2602`, requires `MISTRAL_API_KEY`, implemented with direct Mistral HTTP multipart upload.
 - `grok`: default model `grok-transcribe-1`, requires `XAI_API_KEY`, implemented with direct HTTP multipart upload.
-- `vertex-gemini`: models `gemini-2.5-flash` and `gemini-2.5-pro`, requires `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`; API calls are isolated behind a `VertexClient` adapter and default to the Python reference provider bridge.
-- `sherpa-parakeet`: model `parakeet-tdt-0.6b-v3-int8`, no cloud credentials; cache/audio/runtime concerns are isolated behind provider boundaries and default to the Python reference provider bridge.
+- `vertex-gemini`: models `gemini-2.5-flash` and `gemini-2.5-pro`, requires `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`; API calls are isolated behind a native `VertexClient` adapter.
+- `sherpa-parakeet`: model `parakeet-tdt-0.6b-v3-int8`, no cloud credentials; cache/audio/runtime concerns are isolated behind native provider boundaries.
 
-The Go code includes deterministic provider parsing, retry, cache, and runtime-boundary tests. The Python bridge keeps the current operational provider behavior available while the Go provider boundaries remain independently testable.
+The Go CLI no longer shells out to the Python reference providers. Voxtral and Grok are operational native HTTP providers; Vertex Gemini and Sherpa Parakeet require native adapters/runtimes to be injected before use.

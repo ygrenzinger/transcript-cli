@@ -61,7 +61,7 @@ type Registry struct{ providers map[string]Provider }
 
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
-	r.Register(VoxtralProvider{})
+	r.Register(VoxtralProvider{URL: "https://api.mistral.ai/v1/audio/transcriptions", Client: http.DefaultClient})
 	r.Register(GrokProvider{URL: "https://api.x.ai/v1/stt", Client: http.DefaultClient})
 	r.Register(VertexGeminiProvider{})
 	r.Register(SherpaParakeetProvider{ModelURL: SherpaParakeetModelURL, Runner: ExecRunner{}})
@@ -352,15 +352,117 @@ func cueFromWords(index int, words []map[string]any) srt.Cue {
 	return srt.Cue{Index: index, StartMS: start, EndMS: end, Speaker: speaker, Text: strings.Join(texts, " ")}
 }
 
-type VoxtralProvider struct{}
+type VoxtralProvider struct {
+	URL    string
+	Client *http.Client
+}
 
 func (VoxtralProvider) Metadata() Metadata {
 	return Metadata{Name: "voxtral", Models: []string{"voxtral-mini-2602"}, DefaultModel: "voxtral-mini-2602", RequiredEnvVars: []string{"MISTRAL_API_KEY"}}
 }
 
-func (VoxtralProvider) Transcribe(ctx context.Context, audioPath, outputPath, model, language string) error {
-	_ = ctx
-	return runPythonProvider("voxtral", audioPath, outputPath, model, language)
+func (p VoxtralProvider) Transcribe(ctx context.Context, audioPath, outputPath, model, language string) error {
+	modelID, err := ResolveModel(p.Metadata(), model)
+	if err != nil {
+		return err
+	}
+	apiKey := os.Getenv("MISTRAL_API_KEY")
+	if apiKey == "" {
+		return &Error{Message: "missing required environment variable: MISTRAL_API_KEY"}
+	}
+	bodyReader, bodyWriter := io.Pipe()
+	mw := multipart.NewWriter(bodyWriter)
+	go func() {
+		defer bodyWriter.Close()
+		defer mw.Close()
+		_ = mw.WriteField("model", modelID)
+		_ = mw.WriteField("timestamp_granularities", "segment")
+		if language != "" {
+			_ = mw.WriteField("language", language)
+		}
+		file, openErr := os.Open(audioPath)
+		if openErr != nil {
+			_ = bodyWriter.CloseWithError(openErr)
+			return
+		}
+		defer file.Close()
+		part, createErr := mw.CreateFormFile("file", filepath.Base(audioPath))
+		if createErr != nil {
+			_ = bodyWriter.CloseWithError(createErr)
+			return
+		}
+		_, _ = io.Copy(part, file)
+	}()
+	client := p.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	url := p.URL
+	if url == "" {
+		url = "https://api.mistral.ai/v1/audio/transcriptions"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bodyReader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		return &Error{Message: "voxtral transcription failed: " + err.Error(), Transient: true, Err: err}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return &Error{Message: fmt.Sprintf("voxtral transcription failed: HTTP %d", resp.StatusCode), StatusCode: resp.StatusCode, RetryAfter: resp.Header.Get("Retry-After")}
+	}
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return &Error{Message: "voxtral transcription response was not JSON", Err: err}
+	}
+	cues, err := VoxtralResultToCues(result)
+	if err != nil {
+		return err
+	}
+	return srt.AtomicWriteFile(outputPath, cues)
+}
+
+func VoxtralResultToCues(result map[string]any) ([]srt.Cue, error) {
+	if raw, ok := result["segments"].([]any); ok {
+		cues := []srt.Cue{}
+		for _, item := range raw {
+			segment, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			text := strings.TrimSpace(fmt.Sprint(segment["text"]))
+			if text == "" || text == "<nil>" {
+				continue
+			}
+			start, ok1 := numberMS(segment["start"])
+			end, ok2 := numberMS(segment["end"])
+			if !ok1 || !ok2 {
+				return nil, &Error{Message: "voxtral returned a segment with invalid timestamp"}
+			}
+			if end <= start {
+				return nil, &Error{Message: "voxtral returned a non-positive-duration segment"}
+			}
+			speaker := ""
+			if v, ok := segment["speaker"]; ok && v != nil {
+				speaker = "Speaker " + fmt.Sprint(v)
+			} else if v, ok := segment["speaker_id"]; ok && v != nil {
+				speaker = "Speaker " + fmt.Sprint(v)
+			}
+			cues = append(cues, srt.Cue{Index: len(cues) + 1, StartMS: start, EndMS: end, Speaker: speaker, Text: text})
+		}
+		if len(cues) > 0 {
+			return cues, nil
+		}
+	}
+	text := strings.TrimSpace(fmt.Sprint(result["text"]))
+	if text == "" || text == "<nil>" {
+		return nil, &Error{Message: "voxtral returned no transcription text"}
+	}
+	return []srt.Cue{{Index: 1, StartMS: 0, EndMS: max(1000, len(text)*1000/15), Text: text}}, nil
 }
 
 type VertexGeminiProvider struct{ Client VertexClient }
@@ -378,7 +480,7 @@ func (p VertexGeminiProvider) Transcribe(ctx context.Context, audioPath, outputP
 		return err
 	}
 	if p.Client == nil {
-		return runPythonProvider("vertex-gemini", audioPath, outputPath, model, language)
+		return &Error{Message: "vertex-gemini native client is not configured"}
 	}
 	audio, err := os.ReadFile(audioPath)
 	if err != nil {
@@ -476,7 +578,7 @@ func (p SherpaParakeetProvider) Transcribe(ctx context.Context, audioPath, outpu
 		return err
 	}
 	if p.Runtime == nil {
-		return runPythonProvider("sherpa-parakeet", audioPath, outputPath, model, language)
+		return &Error{Message: "sherpa-parakeet native runtime is not configured"}
 	}
 	modelDir, err := EnsureSherpaParakeetModel(p.ModelURL, os.Getenv, http.DefaultClient)
 	if err != nil {
@@ -741,55 +843,6 @@ func NormalizeSherpaText(text string) string {
 		text = strings.ReplaceAll(text, " "+mark, mark)
 	}
 	return text
-}
-
-func runPythonProvider(name, audioPath, outputPath, model, language string) error {
-	pythonDir, err := findPythonReferenceDir()
-	if err != nil {
-		return &Error{Message: fmt.Sprintf("%s transcription failed: %v", name, err), Err: err}
-	}
-	code := `
-import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv[1])
-from providers import get_provider, transcribe_with_retries
-provider = get_provider(sys.argv[2])
-model = sys.argv[5] or None
-language = sys.argv[6] or None
-transcribe_with_retries(provider, Path(sys.argv[3]), Path(sys.argv[4]), model, language)
-`
-	cmd := exec.Command("python3", "-c", code, pythonDir, name, audioPath, outputPath, model, language)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return &Error{Message: fmt.Sprintf("%s transcription failed: %v", name, err), Err: err}
-	}
-	return nil
-}
-
-func findPythonReferenceDir() (string, error) {
-	if configured := os.Getenv("VIDEO_TO_SRT_PYTHON_DIR"); configured != "" {
-		if info, err := os.Stat(filepath.Join(configured, "providers.py")); err == nil && !info.IsDir() {
-			return configured, nil
-		}
-		return "", fmt.Errorf("VIDEO_TO_SRT_PYTHON_DIR does not contain providers.py")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for dir := cwd; ; dir = filepath.Dir(dir) {
-		for _, candidate := range []string{filepath.Join(dir, "python"), filepath.Join(dir, "..", "python")} {
-			if info, err := os.Stat(filepath.Join(candidate, "providers.py")); err == nil && !info.IsDir() {
-				return candidate, nil
-			}
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-	}
-	return "", fmt.Errorf("could not locate Python reference providers.py")
 }
 
 func numberSeconds(v any) (float64, bool) {

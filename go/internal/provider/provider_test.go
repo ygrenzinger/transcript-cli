@@ -127,7 +127,53 @@ func TestGrokHTTPAndCueConversion(t *testing.T) {
 	}
 }
 
+func TestVoxtralHTTPAndCueConversion(t *testing.T) {
+	dir := t.TempDir()
+	audio := filepath.Join(dir, "a.mp3")
+	out := filepath.Join(dir, "out.srt")
+	if err := os.WriteFile(audio, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MISTRAL_API_KEY", "key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("x-api-key") != "key" {
+			t.Fatalf("bad request: %s %s", r.Method, r.Header.Get("x-api-key"))
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		if r.FormValue("model") != "voxtral-mini-2602" || r.FormValue("language") != "fr" || r.FormValue("timestamp_granularities") != "segment" {
+			t.Fatalf("bad form: %v", r.Form)
+		}
+		_, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"segments":[{"text":"bonjour","start":0.5,"end":1.25,"speaker_id":1}]}`))
+	}))
+	defer server.Close()
+	if err := (VoxtralProvider{URL: server.URL, Client: server.Client()}).Transcribe(context.Background(), audio, out, "", "fr"); err != nil {
+		t.Fatal(err)
+	}
+	cues, err := srt.ParseFile(out)
+	if err != nil || len(cues) != 1 || cues[0].StartMS != 500 || cues[0].EndMS != 1250 || cues[0].Speaker != "Speaker 1" {
+		t.Fatalf("cues=%#v err=%v", cues, err)
+	}
+	if cues, err := VoxtralResultToCues(map[string]any{"text": "plain transcript"}); err != nil || len(cues) != 1 || cues[0].EndMS < 1000 {
+		t.Fatalf("fallback cues=%#v err=%v", cues, err)
+	}
+	if _, err := VoxtralResultToCues(map[string]any{}); err == nil {
+		t.Fatal("expected empty result error")
+	}
+}
+
 func TestVertexAndSherpaConversions(t *testing.T) {
+	if err := (VertexGeminiProvider{}).Transcribe(context.Background(), "in.mp3", "out.srt", "", ""); err == nil || !strings.Contains(err.Error(), "native client is not configured") {
+		t.Fatalf("expected native vertex client error, got %v", err)
+	}
+	if err := (SherpaParakeetProvider{}).Transcribe(context.Background(), "in.mp3", "out.srt", "", ""); err == nil || !strings.Contains(err.Error(), "native runtime is not configured") {
+		t.Fatalf("expected native sherpa runtime error, got %v", err)
+	}
 	cues, err := VertexGeminiResponseToCues(`{"segments":[{"start":0,"end":1.2,"text":"hi"}]}`)
 	if err != nil || cues[0].EndMS != 1200 {
 		t.Fatalf("vertex cues=%#v err=%v", cues, err)
