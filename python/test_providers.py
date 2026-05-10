@@ -64,8 +64,9 @@ class ProviderConfigurationTests(unittest.TestCase):
         parakeet = providers.get_provider("sherpa-parakeet")
 
         self.assertEqual(900, gemini.split_config.target_chunk_duration)
-        self.assertEqual(120, parakeet.split_config.target_chunk_duration)
-        self.assertEqual(15, parakeet.split_config.overlap_duration)
+        self.assertEqual(30, parakeet.split_config.target_chunk_duration)
+        self.assertEqual(5, parakeet.split_config.overlap_duration)
+        self.assertEqual(5, parakeet.split_config.search_window)
 
 
 class ProviderOwnedSplittingTests(unittest.TestCase):

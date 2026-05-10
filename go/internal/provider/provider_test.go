@@ -49,7 +49,7 @@ func TestRegistryModelEnvAndDiscovery(t *testing.T) {
 	if gemini, _ := r.Get("vertex-gemini"); gemini.(VertexGeminiProvider).Splitter == nil || gemini.(VertexGeminiProvider).Splitter.TargetChunkDuration != 900 {
 		t.Fatalf("bad gemini splitter: %#v", gemini)
 	}
-	if parakeet, _ := r.Get("sherpa-parakeet"); parakeet.(SherpaParakeetProvider).Runtime == nil || parakeet.(SherpaParakeetProvider).Splitter == nil || parakeet.(SherpaParakeetProvider).Splitter.TargetChunkDuration != 120 || parakeet.(SherpaParakeetProvider).Splitter.OverlapDuration != 15 {
+	if parakeet, _ := r.Get("sherpa-parakeet"); parakeet.(SherpaParakeetProvider).Runtime == nil || parakeet.(SherpaParakeetProvider).Splitter == nil || parakeet.(SherpaParakeetProvider).Splitter.TargetChunkDuration != 30 || parakeet.(SherpaParakeetProvider).Splitter.OverlapDuration != 5 || parakeet.(SherpaParakeetProvider).Splitter.SearchWindow != 5 {
 		t.Fatalf("bad parakeet splitter: %#v", parakeet)
 	}
 	if _, err := r.Get("bad"); err == nil || !strings.Contains(err.Error(), "Available providers") {

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"video-to-srt/internal/srt"
 )
@@ -155,18 +156,29 @@ func (s Splitter) Split(ctx context.Context, audioPath, outputDir string) ([]Chu
 	if duration <= float64(s.Config.TargetChunkDuration)+float64(s.Config.TargetChunkDuration)/2 {
 		return []Chunk{{Path: audioPath, Index: 0, StartTime: 0, EndTime: duration}}, nil
 	}
+	logSplit("SILENCE_DETECT", map[string]any{"status": "START", "input": audioPath})
+	silenceStart := time.Now()
 	silences, err := s.DetectSilences(ctx, audioPath)
 	if err != nil {
 		return nil, err
 	}
+	logSplit("SILENCE_DETECT", map[string]any{
+		"status":           "DONE",
+		"input":            audioPath,
+		"silences":         len(silences),
+		"duration_seconds": math.Round(time.Since(silenceStart).Seconds()*1000) / 1000,
+	})
 	points := s.SplitPoints(duration, silences)
 	if len(points) == 0 {
 		return []Chunk{{Path: audioPath, Index: 0, StartTime: 0, EndTime: duration}}, nil
 	}
 	boundaries := append([]float64{0}, points...)
 	boundaries = append(boundaries, duration)
+	total := len(boundaries) - 1
+	logSplit("EXTRACT", map[string]any{"status": "START", "chunks": total})
+	extractStart := time.Now()
 	chunks := []Chunk{}
-	for i := 0; i < len(boundaries)-1; i++ {
+	for i := 0; i < total; i++ {
 		start := boundaries[i]
 		end := boundaries[i+1]
 		actualStart := start
@@ -181,6 +193,7 @@ func (s Splitter) Split(ctx context.Context, audioPath, outputDir string) ([]Chu
 		if err := s.ExtractChunk(ctx, audioPath, chunkPath, actualStart, actualEnd); err != nil {
 			return nil, err
 		}
+		logSplit("EXTRACT", map[string]any{"status": "PROGRESS", "index": i + 1, "total": total})
 		chunk := Chunk{Path: chunkPath, Index: i, StartTime: actualStart, EndTime: actualEnd}
 		if i > 0 {
 			chunk.OverlapStart = start - actualStart
@@ -190,7 +203,28 @@ func (s Splitter) Split(ctx context.Context, audioPath, outputDir string) ([]Chu
 		}
 		chunks = append(chunks, chunk)
 	}
+	logSplit("EXTRACT", map[string]any{
+		"status":           "DONE",
+		"chunks":           total,
+		"duration_seconds": math.Round(time.Since(extractStart).Seconds()*1000) / 1000,
+	})
 	return chunks, nil
+}
+
+func logSplit(event string, fields map[string]any) {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := fmt.Sprint(fields[k])
+		v = strings.ReplaceAll(v, "\\", "\\\\")
+		v = strings.ReplaceAll(v, "\"", "\\\"")
+		parts = append(parts, fmt.Sprintf("%s=\"%s\"", k, v))
+	}
+	fmt.Fprintf(os.Stderr, "%s %s\n", event, strings.Join(parts, " "))
 }
 
 func (s Splitter) ExtractChunk(ctx context.Context, source, dest string, start, end float64) error {

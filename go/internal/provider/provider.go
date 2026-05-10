@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -67,8 +68,9 @@ func DefaultRegistry() *Registry {
 	geminiSplitter := audio.DefaultSplitterConfig()
 	geminiSplitter.TargetChunkDuration = 900
 	parakeetSplitter := audio.DefaultSplitterConfig()
-	parakeetSplitter.TargetChunkDuration = 120
-	parakeetSplitter.OverlapDuration = 15
+	parakeetSplitter.TargetChunkDuration = 30
+	parakeetSplitter.OverlapDuration = 5
+	parakeetSplitter.SearchWindow = 5
 	r.Register(VoxtralProvider{URL: "https://api.mistral.ai/v1/audio/transcriptions", Client: http.DefaultClient})
 	r.Register(GrokProvider{URL: "https://api.x.ai/v1/stt", Client: http.DefaultClient})
 	r.Register(VertexGeminiProvider{Splitter: &geminiSplitter})
@@ -967,7 +969,14 @@ func recognizeSherpaWave(modelDir string, wave *sherpa.Wave, runtimeProvider str
 	}
 	defer sherpa.DeleteOfflineStream(stream)
 	stream.AcceptWaveform(wave.SampleRate, wave.Samples)
+	logProviderProgress("PARAKEET", map[string]any{"status": "START", "runtime": runtimeProvider})
+	decodeStart := time.Now()
 	recognizer.Decode(stream)
+	logProviderProgress("PARAKEET", map[string]any{
+		"status":           "DONE",
+		"runtime":          runtimeProvider,
+		"duration_seconds": math.Round(time.Since(decodeStart).Seconds()*1000) / 1000,
+	})
 	return SherpaRecognizerResultToCues(stream.GetResult())
 }
 

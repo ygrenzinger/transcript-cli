@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
+import time
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -119,19 +121,35 @@ class AudioSplitter:
         duration = self.get_audio_duration(audio_path)
         if duration <= self.config.target_chunk_duration + self.config.target_chunk_duration / 2:
             return [AudioChunk(path=audio_path, index=0, start_time=0, end_time=duration)]
-        split_points = self.calculate_split_points(duration, self.detect_silences(audio_path))
+
+        _log_split("SILENCE_DETECT", status="START", input=audio_path)
+        silence_start = time.monotonic()
+        silences = self.detect_silences(audio_path)
+        _log_split(
+            "SILENCE_DETECT",
+            status="DONE",
+            input=audio_path,
+            silences=len(silences),
+            duration_seconds=round(time.monotonic() - silence_start, 3),
+        )
+
+        split_points = self.calculate_split_points(duration, silences)
         if not split_points:
             return [AudioChunk(path=audio_path, index=0, start_time=0, end_time=duration)]
 
         chunks: list[AudioChunk] = []
         boundaries = [0.0, *split_points, duration]
-        for index in range(len(boundaries) - 1):
+        total = len(boundaries) - 1
+        _log_split("EXTRACT", status="START", chunks=total)
+        extract_start = time.monotonic()
+        for index in range(total):
             chunk_start = boundaries[index]
             chunk_end = boundaries[index + 1]
             actual_start = max(0.0, chunk_start - self.config.overlap_duration) if index > 0 else 0.0
             actual_end = min(duration, chunk_end + self.config.overlap_duration) if index < len(boundaries) - 2 else duration
             chunk_path = output_dir / f"{audio_path.stem}_chunk{index:03d}{audio_path.suffix}"
             self.extract_chunk(audio_path, chunk_path, actual_start, actual_end)
+            _log_split("EXTRACT", status="PROGRESS", index=index + 1, total=total)
             chunks.append(
                 AudioChunk(
                     path=chunk_path,
@@ -142,6 +160,12 @@ class AudioSplitter:
                     overlap_end=actual_end - chunk_end if index < len(boundaries) - 2 else 0,
                 )
             )
+        _log_split(
+            "EXTRACT",
+            status="DONE",
+            chunks=total,
+            duration_seconds=round(time.monotonic() - extract_start, 3),
+        )
         return chunks
 
     def extract_chunk(self, source: Path, dest: Path, start: float, end: float) -> None:
@@ -156,6 +180,14 @@ class AudioSplitter:
         distance = abs(silence.center - target)
         distance_factor = max(0.0, 1 - (distance / self.config.search_window))
         return silence.duration * distance_factor
+
+
+def _log_split(event: str, **fields: object) -> None:
+    parts: list[str] = []
+    for key, value in fields.items():
+        escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        parts.append(f'{key}="{escaped}"')
+    print(f"{event} {' '.join(parts)}", file=sys.stderr)
 
 
 def parse_silencedetect_output(output: str) -> list[SilencePoint]:

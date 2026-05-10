@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import os
 import platform
@@ -667,20 +668,36 @@ def transcribe_sherpa_parakeet_wav(model_dir: Path, wav_path: Path) -> list[Cue]
     samples, sample_rate = read_sherpa_wave(wav_path, np)
     last_error: Exception | None = None
     for runtime_provider in sherpa_runtime_candidates():
+        recognizer = None
+        stream = None
         try:
             recognizer, selected_provider = create_sherpa_parakeet_recognizer(sherpa_onnx, model_dir, runtime_provider)
             log_sherpa_runtime_selection(selected_provider)
             stream = recognizer.create_stream()
             stream.accept_waveform(sample_rate, samples)
+            log_provider_progress("PARAKEET", status="START", runtime=selected_provider, input=wav_path)
+            decode_start = time.monotonic()
             if hasattr(recognizer, "decode_stream"):
                 recognizer.decode_stream(stream)
             else:
                 recognizer.decode_streams([stream])
+            log_provider_progress(
+                "PARAKEET",
+                status="DONE",
+                runtime=selected_provider,
+                input=wav_path,
+                duration_seconds=round(time.monotonic() - decode_start, 3),
+            )
             return sherpa_result_to_cues(stream.result)
         except Exception as exc:  # sherpa runtime errors vary by platform/provider
             last_error = exc
             if runtime_provider == "cpu":
                 break
+        finally:
+            # Drop ONNX session arenas before the next fallback so they don't stack.
+            del stream
+            del recognizer
+            gc.collect()
     raise ProviderError(f"sherpa-parakeet transcription failed: {last_error}") from last_error
 
 
@@ -843,7 +860,7 @@ PROVIDERS: dict[str, TranscriptionProvider] = {
     "voxtral": VoxtralProvider(),
     "grok": GrokProvider(),
     "vertex-gemini": VertexGeminiProvider(split_config=SplitterConfig(target_chunk_duration=900)),
-    "sherpa-parakeet": SherpaParakeetProvider(split_config=SplitterConfig(target_chunk_duration=120, overlap_duration=15)),
+    "sherpa-parakeet": SherpaParakeetProvider(split_config=SplitterConfig(target_chunk_duration=30, overlap_duration=5, search_window=5)),
 }
 
 
