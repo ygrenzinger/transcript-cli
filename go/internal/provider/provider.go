@@ -19,6 +19,9 @@ import (
 	"strings"
 	"time"
 
+	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+
+	"video-to-srt/internal/audio"
 	"video-to-srt/internal/srt"
 )
 
@@ -61,10 +64,15 @@ type Registry struct{ providers map[string]Provider }
 
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
+	geminiSplitter := audio.DefaultSplitterConfig()
+	geminiSplitter.TargetChunkDuration = 900
+	parakeetSplitter := audio.DefaultSplitterConfig()
+	parakeetSplitter.TargetChunkDuration = 120
+	parakeetSplitter.OverlapDuration = 15
 	r.Register(VoxtralProvider{URL: "https://api.mistral.ai/v1/audio/transcriptions", Client: http.DefaultClient})
 	r.Register(GrokProvider{URL: "https://api.x.ai/v1/stt", Client: http.DefaultClient})
-	r.Register(VertexGeminiProvider{})
-	r.Register(SherpaParakeetProvider{ModelURL: SherpaParakeetModelURL, Runner: ExecRunner{}})
+	r.Register(VertexGeminiProvider{Splitter: &geminiSplitter})
+	r.Register(SherpaParakeetProvider{ModelURL: SherpaParakeetModelURL, Runner: ExecRunner{}, Runtime: SherpaONNXRuntime{Getenv: os.Getenv}, Splitter: &parakeetSplitter})
 	return r
 }
 
@@ -139,6 +147,8 @@ func (r *Registry) ListJSON() (string, error) {
 
 type Sleeper func(time.Duration)
 
+type SingleTranscriber func(ctx context.Context, audioPath, outputPath, model, language string) error
+
 func TranscribeWithRetries(ctx context.Context, p Provider, audioPath, outputPath, model, language string, sleep Sleeper) error {
 	if sleep == nil {
 		sleep = time.Sleep
@@ -153,6 +163,117 @@ func TranscribeWithRetries(ctx context.Context, p Provider, audioPath, outputPat
 		}
 		sleep(RetryDelay(err, RetryDelays[attempt], time.Now))
 	}
+}
+
+func TranscribeOneWithRetries(ctx context.Context, transcribeOne SingleTranscriber, audioPath, outputPath, model, language string, sleep Sleeper) error {
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	for attempt := 0; ; attempt++ {
+		err := transcribeOne(ctx, audioPath, outputPath, model, language)
+		if err == nil {
+			return nil
+		}
+		if attempt == len(RetryDelays) || !IsRetryable(err) {
+			return err
+		}
+		sleep(RetryDelay(err, RetryDelays[attempt], time.Now))
+	}
+}
+
+func TranscribeWithSplitter(ctx context.Context, transcribeOne SingleTranscriber, audioPath, outputPath, model, language string, config audio.SplitterConfig, sleep Sleeper) error {
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	workDir, err := os.MkdirTemp("", "video-to-srt-chunks-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(workDir)
+	splitter, err := audio.NewSplitter(config, nil)
+	if err != nil {
+		return err
+	}
+	logProviderProgress("SPLIT", map[string]any{"status": "START", "input": audioPath, "target_chunk_seconds": config.TargetChunkDuration, "overlap_seconds": config.OverlapDuration})
+	chunks, err := splitter.Split(ctx, audioPath, workDir)
+	if err != nil {
+		logProviderProgress("SPLIT", map[string]any{"status": "FAIL", "input": audioPath, "error": fmt.Sprintf("%T", err)})
+		return err
+	}
+	logProviderProgress("SPLIT", map[string]any{"status": "DONE", "input": audioPath, "chunks": len(chunks), "duration_seconds": chunkSetDuration(chunks)})
+	if len(chunks) == 1 && chunks[0].Path == audioPath {
+		logProviderProgress("SPLIT", map[string]any{"status": "SKIP", "input": audioPath, "reason": "below_chunk_capacity"})
+		if err := TranscribeOneWithRetries(ctx, transcribeOne, audioPath, outputPath, model, language, sleep); err != nil {
+			return &Error{Message: fmt.Sprintf("chunk transcription failed for %s: %v", audioPath, err)}
+		}
+		return nil
+	}
+	return TranscribeChunks(ctx, transcribeOne, chunks, outputPath, model, language, workDir, config.SimilarityThreshold, sleep)
+}
+
+func TranscribeChunks(ctx context.Context, transcribeOne SingleTranscriber, chunks []audio.Chunk, outputPath, model, language, workDir string, similarityThreshold float64, sleep Sleeper) error {
+	srtPaths := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunkSRT := filepath.Join(workDir, fmt.Sprintf("chunk%03d.srt", chunk.Index))
+		logProviderProgress("CHUNK", map[string]any{"status": "START", "index": chunk.Index + 1, "total": len(chunks), "input": chunk.Path, "start_seconds": chunk.StartTime, "end_seconds": chunk.EndTime})
+		if err := TranscribeOneWithRetries(ctx, transcribeOne, chunk.Path, chunkSRT, model, language, sleep); err != nil {
+			logProviderProgress("CHUNK", map[string]any{"status": "FAIL", "index": chunk.Index + 1, "total": len(chunks), "input": chunk.Path, "error": fmt.Sprintf("%T", err)})
+			return &Error{Message: fmt.Sprintf("chunk transcription failed for chunk %d at %s: %v", chunk.Index, chunk.Path, err)}
+		}
+		logProviderProgress("CHUNK", map[string]any{"status": "DONE", "index": chunk.Index + 1, "total": len(chunks), "artifact": chunkSRT})
+		srtPaths = append(srtPaths, chunkSRT)
+	}
+	logProviderProgress("MERGE", map[string]any{"status": "START", "chunks": len(chunks), "output": outputPath})
+	if err := audio.MergeChunkSRTs(chunks, srtPaths, outputPath, similarityThreshold); err != nil {
+		logProviderProgress("MERGE", map[string]any{"status": "FAIL", "chunks": len(chunks), "output": outputPath, "error": fmt.Sprintf("%T", err)})
+		return err
+	}
+	logProviderProgress("MERGE", map[string]any{"status": "DONE", "chunks": len(chunks), "artifact": outputPath})
+	return nil
+}
+
+func logProviderProgress(event string, fields map[string]any) {
+	keys := providerLogKeys(fields)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, formatProviderLogValue(fields[key])))
+	}
+	fmt.Fprintln(os.Stderr, event+" "+strings.Join(parts, " "))
+}
+
+func providerLogKeys(fields map[string]any) []string {
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	order := map[string]int{"status": 0, "index": 1, "total": 2, "input": 3, "output": 4, "artifact": 5, "target_chunk_seconds": 6, "overlap_seconds": 7, "chunks": 8, "duration_seconds": 9, "start_seconds": 10, "end_seconds": 11, "reason": 12, "error": 13}
+	sort.SliceStable(keys, func(i, j int) bool {
+		return providerLogOrder(keys[i], order) < providerLogOrder(keys[j], order)
+	})
+	return keys
+}
+
+func providerLogOrder(key string, order map[string]int) int {
+	if value, ok := order[key]; ok {
+		return value
+	}
+	return 1000 + len(key)
+}
+
+func formatProviderLogValue(value any) string {
+	escaped := strings.ReplaceAll(fmt.Sprint(value), `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
+}
+
+func chunkSetDuration(chunks []audio.Chunk) float64 {
+	duration := 0.0
+	for _, chunk := range chunks {
+		if chunk.EndTime > duration {
+			duration = chunk.EndTime
+		}
+	}
+	return duration
 }
 
 func IsRetryable(err error) bool {
@@ -185,8 +306,9 @@ func RetryDelay(err error, def time.Duration, now func() time.Time) time.Duratio
 }
 
 type GrokProvider struct {
-	URL    string
-	Client *http.Client
+	URL      string
+	Client   *http.Client
+	Splitter *audio.SplitterConfig
 }
 
 func (GrokProvider) Metadata() Metadata {
@@ -194,6 +316,13 @@ func (GrokProvider) Metadata() Metadata {
 }
 
 func (p GrokProvider) Transcribe(ctx context.Context, audioPath, outputPath, model, language string) error {
+	if p.Splitter != nil {
+		return TranscribeWithSplitter(ctx, p.transcribeSingle, audioPath, outputPath, model, language, *p.Splitter, nil)
+	}
+	return p.transcribeSingle(ctx, audioPath, outputPath, model, language)
+}
+
+func (p GrokProvider) transcribeSingle(ctx context.Context, audioPath, outputPath, model, language string) error {
 	modelID, err := ResolveModel(p.Metadata(), model)
 	if err != nil {
 		return err
@@ -465,7 +594,10 @@ func VoxtralResultToCues(result map[string]any) ([]srt.Cue, error) {
 	return []srt.Cue{{Index: 1, StartMS: 0, EndMS: max(1000, len(text)*1000/15), Text: text}}, nil
 }
 
-type VertexGeminiProvider struct{ Client VertexClient }
+type VertexGeminiProvider struct {
+	Client   VertexClient
+	Splitter *audio.SplitterConfig
+}
 type VertexClient interface {
 	Generate(ctx context.Context, audio []byte, model, language string) (any, error)
 }
@@ -475,12 +607,19 @@ func (VertexGeminiProvider) Metadata() Metadata {
 }
 
 func (p VertexGeminiProvider) Transcribe(ctx context.Context, audioPath, outputPath, model, language string) error {
+	if p.Client == nil {
+		return &Error{Message: "vertex-gemini native client is not configured"}
+	}
+	if p.Splitter != nil {
+		return TranscribeWithSplitter(ctx, p.transcribeSingle, audioPath, outputPath, model, language, *p.Splitter, nil)
+	}
+	return p.transcribeSingle(ctx, audioPath, outputPath, model, language)
+}
+
+func (p VertexGeminiProvider) transcribeSingle(ctx context.Context, audioPath, outputPath, model, language string) error {
 	modelID, err := ResolveModel(p.Metadata(), model)
 	if err != nil {
 		return err
-	}
-	if p.Client == nil {
-		return &Error{Message: "vertex-gemini native client is not configured"}
 	}
 	audio, err := os.ReadFile(audioPath)
 	if err != nil {
@@ -564,9 +703,40 @@ type SherpaParakeetProvider struct {
 	ModelURL string
 	Runner   CommandRunner
 	Runtime  SherpaRuntime
+	Splitter *audio.SplitterConfig
 }
 type SherpaRuntime interface {
 	Recognize(ctx context.Context, modelDir, wavPath string) ([]srt.Cue, error)
+}
+
+type SherpaONNXRuntime struct {
+	Getenv func(string) string
+}
+
+func (r SherpaONNXRuntime) Recognize(ctx context.Context, modelDir, wavPath string) ([]srt.Cue, error) {
+	getenv := r.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	wave := sherpa.ReadWave(wavPath)
+	if wave == nil {
+		return nil, fmt.Errorf("failed to read prepared WAV audio")
+	}
+	var lastErr error
+	for _, runtimeProvider := range SherpaRuntimeCandidates(getenv) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		cues, err := recognizeSherpaWave(modelDir, wave, runtimeProvider, SherpaNumThreads(getenv))
+		if err == nil {
+			return cues, nil
+		}
+		lastErr = err
+		if runtimeProvider == "cpu" {
+			break
+		}
+	}
+	return nil, lastErr
 }
 
 func (SherpaParakeetProvider) Metadata() Metadata {
@@ -574,11 +744,18 @@ func (SherpaParakeetProvider) Metadata() Metadata {
 }
 
 func (p SherpaParakeetProvider) Transcribe(ctx context.Context, audioPath, outputPath, model, language string) error {
-	if _, err := ResolveModel(p.Metadata(), model); err != nil {
-		return err
-	}
 	if p.Runtime == nil {
 		return &Error{Message: "sherpa-parakeet native runtime is not configured"}
+	}
+	if p.Splitter != nil {
+		return TranscribeWithSplitter(ctx, p.transcribeSingle, audioPath, outputPath, model, language, *p.Splitter, nil)
+	}
+	return p.transcribeSingle(ctx, audioPath, outputPath, model, language)
+}
+
+func (p SherpaParakeetProvider) transcribeSingle(ctx context.Context, audioPath, outputPath, model, language string) error {
+	if _, err := ResolveModel(p.Metadata(), model); err != nil {
+		return err
 	}
 	modelDir, err := EnsureSherpaParakeetModel(p.ModelURL, os.Getenv, http.DefaultClient)
 	if err != nil {
@@ -761,6 +938,55 @@ func SherpaNumThreads(getenv func(string) string) int {
 		return 2
 	}
 	return n
+}
+
+func recognizeSherpaWave(modelDir string, wave *sherpa.Wave, runtimeProvider string, numThreads int) ([]srt.Cue, error) {
+	config := sherpa.OfflineRecognizerConfig{
+		FeatConfig: sherpa.FeatureConfig{SampleRate: 16000, FeatureDim: 80},
+		ModelConfig: sherpa.OfflineModelConfig{
+			Transducer: sherpa.OfflineTransducerModelConfig{
+				Encoder: filepath.Join(modelDir, "encoder.int8.onnx"),
+				Decoder: filepath.Join(modelDir, "decoder.int8.onnx"),
+				Joiner:  filepath.Join(modelDir, "joiner.int8.onnx"),
+			},
+			Tokens:     filepath.Join(modelDir, "tokens.txt"),
+			NumThreads: numThreads,
+			Provider:   runtimeProvider,
+			ModelType:  "nemo_transducer",
+		},
+		DecodingMethod: "greedy_search",
+	}
+	recognizer := sherpa.NewOfflineRecognizer(&config)
+	if recognizer == nil {
+		return nil, fmt.Errorf("failed to create %s recognizer", runtimeProvider)
+	}
+	defer sherpa.DeleteOfflineRecognizer(recognizer)
+	stream := sherpa.NewOfflineStream(recognizer)
+	if stream == nil {
+		return nil, fmt.Errorf("failed to create %s stream", runtimeProvider)
+	}
+	defer sherpa.DeleteOfflineStream(stream)
+	stream.AcceptWaveform(wave.SampleRate, wave.Samples)
+	recognizer.Decode(stream)
+	return SherpaRecognizerResultToCues(stream.GetResult())
+}
+
+func SherpaRecognizerResultToCues(result *sherpa.OfflineRecognizerResult) ([]srt.Cue, error) {
+	if result == nil {
+		return nil, &Error{Message: "sherpa-parakeet returned no transcription text"}
+	}
+	if len(result.Tokens) > 0 && len(result.Timestamps) > 0 {
+		timestamps := make([]any, len(result.Timestamps))
+		for i, timestamp := range result.Timestamps {
+			timestamps[i] = timestamp
+		}
+		return SherpaTokensToCues(result.Tokens, timestamps)
+	}
+	text := strings.TrimSpace(result.Text)
+	if text != "" {
+		return []srt.Cue{{Index: 1, StartMS: 0, EndMS: max(1000, len(text)*1000/15), Text: text}}, nil
+	}
+	return nil, &Error{Message: "sherpa-parakeet returned no transcription text"}
 }
 
 func SherpaSegmentsToCues(segments []map[string]any) ([]srt.Cue, error) {

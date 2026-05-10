@@ -58,7 +58,7 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (string, error) {
 	}
 	total := 2
 	if opts.Improve {
-		total = 3
+		total++
 	}
 	stderr := deps.Stderr
 	if stderr == nil {

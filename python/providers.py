@@ -18,6 +18,7 @@ from typing import Protocol
 
 import requests
 
+from audio_splitter import AudioChunk, AudioSplitter, SplitterConfig, merge_chunk_srts
 from srt import Cue, write_srt
 
 
@@ -63,6 +64,107 @@ def transcribe_with_retries(
             if attempt_index == len(TRANSCRIPTION_RETRY_DELAYS_SECONDS) or not is_retryable_provider_error(exc):
                 raise
             time.sleep(retry_delay_seconds(exc, TRANSCRIPTION_RETRY_DELAYS_SECONDS[attempt_index]))
+
+
+TranscribeOne = Callable[[Path, Path, str | None, str | None], None]
+
+
+def transcribe_one_with_retries(
+    transcribe_one: TranscribeOne,
+    audio_path: Path,
+    output_path: Path,
+    model: str | None,
+    language: str | None,
+) -> None:
+    for attempt_index in range(len(TRANSCRIPTION_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            transcribe_one(audio_path, output_path, model, language)
+            return
+        except ProviderError as exc:
+            if attempt_index == len(TRANSCRIPTION_RETRY_DELAYS_SECONDS) or not is_retryable_provider_error(exc):
+                raise RuntimeError(f"chunk transcription failed for {audio_path}: {exc}") from exc
+            time.sleep(retry_delay_seconds(exc, TRANSCRIPTION_RETRY_DELAYS_SECONDS[attempt_index]))
+
+
+def transcribe_with_splitter(
+    transcribe_one: TranscribeOne,
+    audio_path: Path,
+    output_path: Path,
+    model: str | None,
+    language: str | None,
+    split_config: SplitterConfig,
+) -> None:
+    split_config.validate()
+    with tempfile.TemporaryDirectory(prefix="video-to-srt-chunks-") as tmpdir:
+        work_dir = Path(tmpdir)
+        log_provider_progress(
+            "SPLIT",
+            status="START",
+            input=audio_path,
+            target_chunk_seconds=split_config.target_chunk_duration,
+            overlap_seconds=split_config.overlap_duration,
+        )
+        try:
+            chunks = AudioSplitter(split_config).split_audio(audio_path, work_dir)
+        except Exception as exc:
+            log_provider_progress("SPLIT", status="FAIL", input=audio_path, error=type(exc).__name__)
+            raise
+        log_provider_progress(
+            "SPLIT",
+            status="DONE",
+            input=audio_path,
+            chunks=len(chunks),
+            duration_seconds=round(max((chunk.end_time for chunk in chunks), default=0), 3),
+        )
+        if len(chunks) == 1 and chunks[0].path == audio_path:
+            log_provider_progress("SPLIT", status="SKIP", input=audio_path, reason="below_chunk_capacity")
+            transcribe_one_with_retries(transcribe_one, audio_path, output_path, model, language)
+            return
+        chunk_srt_paths: list[Path] = []
+        for chunk in chunks:
+            chunk_srt = work_dir / f"chunk{chunk.index:03d}.srt"
+            log_provider_progress(
+                "CHUNK",
+                status="START",
+                index=chunk.index + 1,
+                total=len(chunks),
+                input=chunk.path,
+                start_seconds=round(chunk.start_time, 3),
+                end_seconds=round(chunk.end_time, 3),
+            )
+            try:
+                transcribe_one_with_retries(transcribe_one, chunk.path, chunk_srt, model, language)
+            except RuntimeError as exc:
+                log_provider_progress(
+                    "CHUNK",
+                    status="FAIL",
+                    index=chunk.index + 1,
+                    total=len(chunks),
+                    input=chunk.path,
+                    error=type(exc).__name__,
+                )
+                raise RuntimeError(f"chunk transcription failed for chunk {chunk.index} at {chunk.path}: {exc}") from exc
+            log_provider_progress(
+                "CHUNK",
+                status="DONE",
+                index=chunk.index + 1,
+                total=len(chunks),
+                artifact=chunk_srt,
+            )
+            chunk_srt_paths.append(chunk_srt)
+        log_provider_progress("MERGE", status="START", chunks=len(chunks), output=output_path)
+        merge_chunk_srts(chunks, chunk_srt_paths, output_path, split_config.similarity_threshold)
+        log_provider_progress("MERGE", status="DONE", chunks=len(chunks), artifact=output_path)
+
+
+def log_provider_progress(event: str, **fields: object) -> None:
+    detail = " ".join(f"{key}={format_log_value(value)}" for key, value in fields.items())
+    print(f"{event} {detail}", file=sys.stderr)
+
+
+def format_log_value(value: object) -> str:
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def is_retryable_provider_error(error: ProviderError) -> bool:
@@ -174,12 +276,20 @@ class GrokProvider:
     default_model: str = "grok-transcribe-1"
     required_env_vars: tuple[str, ...] = ("XAI_API_KEY",)
     stt_url: str = "https://api.x.ai/v1/stt"
+    split_config: SplitterConfig | None = None
 
     def __post_init__(self) -> None:
         if self.models is None:
             object.__setattr__(self, "models", {"grok-transcribe-1": "grok-transcribe-1"})
 
     def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
+        if self.split_config is not None:
+            transcribe_with_splitter(self.transcribe_single, audio_path, output_path, model, language, self.split_config)
+            return
+
+        self.transcribe_single(audio_path, output_path, model, language)
+
+    def transcribe_single(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
         model_id = resolve_model(self, model)
         api_key = require_env("XAI_API_KEY")
         data: dict[str, str] = {"model": model_id, "response_format": "verbose_json", "timestamp_granularities[]": "word"}
@@ -305,6 +415,7 @@ class VertexGeminiProvider:
     models: dict[str, str] = None  # type: ignore[assignment]
     default_model: str = "gemini-2.5-flash"
     required_env_vars: tuple[str, ...] = ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION")
+    split_config: SplitterConfig | None = None
 
     def __post_init__(self) -> None:
         if self.models is None:
@@ -318,6 +429,13 @@ class VertexGeminiProvider:
             )
 
     def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
+        if self.split_config is not None:
+            transcribe_with_splitter(self.transcribe_single, audio_path, output_path, model, language, self.split_config)
+            return
+
+        self.transcribe_single(audio_path, output_path, model, language)
+
+    def transcribe_single(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
         model_id = resolve_model(self, model)
         project = require_env("GOOGLE_CLOUD_PROJECT")
         location = require_env("GOOGLE_CLOUD_LOCATION")
@@ -416,12 +534,20 @@ class SherpaParakeetProvider:
     default_model: str = SHERPA_PARAKEET_MODEL_KEY
     required_env_vars: tuple[str, ...] = ()
     model_url: str = SHERPA_PARAKEET_MODEL_URL
+    split_config: SplitterConfig | None = None
 
     def __post_init__(self) -> None:
         if self.models is None:
             object.__setattr__(self, "models", {SHERPA_PARAKEET_MODEL_KEY: SHERPA_PARAKEET_MODEL_DIRNAME})
 
     def transcribe(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
+        if self.split_config is not None:
+            transcribe_with_splitter(self.transcribe_single, audio_path, output_path, model, language, self.split_config)
+            return
+
+        self.transcribe_single(audio_path, output_path, model, language)
+
+    def transcribe_single(self, audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
         resolve_model(self, model)
         model_dir = ensure_sherpa_parakeet_model(self.model_url)
         with tempfile.TemporaryDirectory(prefix="sherpa-parakeet-") as tmpdir:
@@ -716,8 +842,8 @@ def normalize_sherpa_text(text: str) -> str:
 PROVIDERS: dict[str, TranscriptionProvider] = {
     "voxtral": VoxtralProvider(),
     "grok": GrokProvider(),
-    "vertex-gemini": VertexGeminiProvider(),
-    "sherpa-parakeet": SherpaParakeetProvider(),
+    "vertex-gemini": VertexGeminiProvider(split_config=SplitterConfig(target_chunk_duration=900)),
+    "sherpa-parakeet": SherpaParakeetProvider(split_config=SplitterConfig(target_chunk_duration=120, overlap_duration=15)),
 }
 
 

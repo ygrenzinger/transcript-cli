@@ -92,6 +92,8 @@ Improve subtitles for readability:
 uv run video-to-srt --provider voxtral --improve-subtitles "/path/to/video.mkv"
 ```
 
+Some providers split long audio internally before transcription. This is provider-owned behavior and is not exposed as a pipeline CLI option. Current defaults: `vertex-gemini` uses 15-minute chunks, `sherpa-parakeet` uses 120-second chunks with 15-second overlap, and `grok`/`voxtral` do not use chunking.
+
 Write improved subtitles to a custom path:
 
 ```bash
@@ -104,6 +106,7 @@ Outputs:
 - Improved SRT, when requested: `/path/to/video.<provider>.improved.srt`
 
 The extracted audio file is removed after successful raw SRT creation.
+When a provider uses internal chunking, its temporary audio chunks and per-chunk SRT files are removed after the merged raw SRT is written successfully.
 
 ## Direct Script Usage
 

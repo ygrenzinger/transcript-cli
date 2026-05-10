@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+
+	"video-to-srt/internal/audio"
 	"video-to-srt/internal/srt"
 )
 
@@ -38,6 +42,15 @@ func TestRegistryModelEnvAndDiscovery(t *testing.T) {
 		if _, err := r.Get(name); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if grok, _ := r.Get("grok"); grok.(GrokProvider).Splitter != nil {
+		t.Fatal("grok must not use chunking")
+	}
+	if gemini, _ := r.Get("vertex-gemini"); gemini.(VertexGeminiProvider).Splitter == nil || gemini.(VertexGeminiProvider).Splitter.TargetChunkDuration != 900 {
+		t.Fatalf("bad gemini splitter: %#v", gemini)
+	}
+	if parakeet, _ := r.Get("sherpa-parakeet"); parakeet.(SherpaParakeetProvider).Runtime == nil || parakeet.(SherpaParakeetProvider).Splitter == nil || parakeet.(SherpaParakeetProvider).Splitter.TargetChunkDuration != 120 || parakeet.(SherpaParakeetProvider).Splitter.OverlapDuration != 15 {
+		t.Fatalf("bad parakeet splitter: %#v", parakeet)
 	}
 	if _, err := r.Get("bad"); err == nil || !strings.Contains(err.Error(), "Available providers") {
 		t.Fatalf("bad provider err = %v", err)
@@ -85,6 +98,72 @@ func TestRetryPolicy(t *testing.T) {
 	if d <= 0 || d > 3*time.Second {
 		t.Fatalf("date retry delay = %v", d)
 	}
+}
+
+func TestProviderOwnedChunkedTranscriptionPreservesOptionsRetriesAndAvoidsPartialOutput(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "chunk000.mp3")
+	second := filepath.Join(dir, "chunk001.mp3")
+	if err := os.WriteFile(first, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chunks := []audio.Chunk{{Path: first, Index: 0, StartTime: 0, EndTime: 5}, {Path: second, Index: 1, StartTime: 5, EndTime: 10}}
+	output := filepath.Join(dir, "out.srt")
+	attempts := map[string]int{}
+	calls := []string{}
+	transcribeOne := func(ctx context.Context, audioPath, outputPath, model, language string) error {
+		attempts[filepath.Base(audioPath)]++
+		calls = append(calls, filepath.Base(audioPath)+":"+model+":"+language)
+		if filepath.Base(audioPath) == "chunk000.mp3" && attempts[filepath.Base(audioPath)] == 1 {
+			return &Error{Message: "temporary", StatusCode: 500}
+		}
+		if filepath.Base(audioPath) == "chunk001.mp3" {
+			return &Error{Message: "permanent"}
+		}
+		return srt.AtomicWriteFile(outputPath, []srt.Cue{{Index: 1, StartMS: 0, EndMS: 1000, Text: "hello"}})
+	}
+	var err error
+	logOutput := captureStderr(t, func() {
+		err = TranscribeChunks(context.Background(), transcribeOne, chunks, output, "model-a", "fr", dir, 0.8, func(time.Duration) {})
+	})
+	if err == nil || !strings.Contains(err.Error(), "chunk 1") {
+		t.Fatalf("expected chunk failure, got %v", err)
+	}
+	if !strings.Contains(logOutput, `CHUNK status="START" index="1" total="2"`) || !strings.Contains(logOutput, `CHUNK status="FAIL" index="2" total="2"`) {
+		t.Fatalf("missing chunk progress logs:\n%s", logOutput)
+	}
+	if attempts["chunk000.mp3"] != 2 || attempts["chunk001.mp3"] != 1 {
+		t.Fatalf("attempts=%v", attempts)
+	}
+	if len(calls) != 3 || calls[0] != "chunk000.mp3:model-a:fr" || calls[2] != "chunk001.mp3:model-a:fr" {
+		t.Fatalf("calls=%v", calls)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("partial output exists: %v", err)
+	}
+}
+
+func captureStderr(t *testing.T, action func()) string {
+	t.Helper()
+	old := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writer
+	defer func() { os.Stderr = old }()
+	action()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func TestGrokHTTPAndCueConversion(t *testing.T) {
@@ -201,6 +280,20 @@ func TestVertexAndSherpaConversions(t *testing.T) {
 	tokens, err := SherpaTokensToCues([]string{"hello", " ", "world."}, []any{0.0, 0.5, 1.0})
 	if err != nil || len(tokens) != 1 || tokens[0].Text != "hello world." {
 		t.Fatalf("tokens=%#v err=%v", tokens, err)
+	}
+}
+
+func TestSherpaRecognizerResultToCues(t *testing.T) {
+	cues, err := SherpaRecognizerResultToCues(&sherpa.OfflineRecognizerResult{Tokens: []string{"hello", " world."}, Timestamps: []float32{0, 0.5}})
+	if err != nil || len(cues) != 1 || cues[0].Text != "hello world." {
+		t.Fatalf("cues=%#v err=%v", cues, err)
+	}
+	cues, err = SherpaRecognizerResultToCues(&sherpa.OfflineRecognizerResult{Text: "plain transcript"})
+	if err != nil || len(cues) != 1 || cues[0].EndMS < 1000 {
+		t.Fatalf("fallback cues=%#v err=%v", cues, err)
+	}
+	if _, err := SherpaRecognizerResultToCues(nil); err == nil {
+		t.Fatal("expected nil result error")
 	}
 }
 

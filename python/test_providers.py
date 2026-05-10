@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import providers
+from audio_splitter import AudioChunk, SplitterConfig
 from providers import (
     ProviderError,
     SHERPA_PARAKEET_MODEL_KEY,
@@ -23,8 +24,10 @@ from providers import (
     sherpa_result_to_cues,
     sherpa_runtime_candidates,
     validate_required_env_vars,
+    transcribe_with_splitter,
     vertex_gemini_result_to_cues,
 )
+from srt import parse_srt, write_srt
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,94 @@ class ProviderConfigurationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ProviderError, "TWO"):
             validate_required_env_vars(provider, get_env=values.get)
+
+    def test_default_split_policies_are_provider_owned(self) -> None:
+        self.assertIsNone(getattr(providers.get_provider("voxtral"), "split_config", None))
+        self.assertIsNone(getattr(providers.get_provider("grok"), "split_config", None))
+        gemini = providers.get_provider("vertex-gemini")
+        parakeet = providers.get_provider("sherpa-parakeet")
+
+        self.assertEqual(900, gemini.split_config.target_chunk_duration)
+        self.assertEqual(120, parakeet.split_config.target_chunk_duration)
+        self.assertEqual(15, parakeet.split_config.overlap_duration)
+
+
+class ProviderOwnedSplittingTests(unittest.TestCase):
+    def test_chunked_provider_helper_preserves_options_and_merges_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            audio = root / "audio.mp3"
+            audio.write_bytes(b"audio")
+            output = root / "out.srt"
+            calls: list[tuple[str, str | None, str | None]] = []
+
+            class FakeAudioSplitter:
+                def __init__(self, _config: SplitterConfig) -> None:
+                    return None
+
+                def split_audio(self, _audio_path: Path, output_dir: Path) -> list[AudioChunk]:
+                    first = output_dir / "chunk000.mp3"
+                    second = output_dir / "chunk001.mp3"
+                    first.write_bytes(b"first")
+                    second.write_bytes(b"second")
+                    return [AudioChunk(first, 0, 0, 5), AudioChunk(second, 1, 5, 10)]
+
+            def transcribe_one(audio_path: Path, output_path: Path, model: str | None, language: str | None) -> None:
+                calls.append((audio_path.name, model, language))
+                text = "hello" if audio_path.name == "chunk000.mp3" else "world"
+                write_srt(output_path, [providers.Cue(index=1, start_ms=0, end_ms=1000, text=text)])
+
+            stderr = StringIO()
+            with patch.object(providers, "AudioSplitter", FakeAudioSplitter), patch("sys.stderr", stderr):
+                transcribe_with_splitter(transcribe_one, audio, output, "model-a", "fr", SplitterConfig(target_chunk_duration=10, overlap_duration=1))
+
+            self.assertEqual([("chunk000.mp3", "model-a", "fr"), ("chunk001.mp3", "model-a", "fr")], calls)
+            self.assertEqual(["hello", "world"], [cue.text for cue in parse_srt(output)])
+            self.assertIn('SPLIT status="START"', stderr.getvalue())
+            self.assertIn('target_chunk_seconds="10"', stderr.getvalue())
+            self.assertIn('CHUNK status="START" index="1" total="2"', stderr.getvalue())
+            self.assertIn('MERGE status="DONE"', stderr.getvalue())
+
+    def test_chunked_provider_helper_retries_each_chunk_and_avoids_partial_final_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            audio = root / "audio.mp3"
+            audio.write_bytes(b"audio")
+            output = root / "out.srt"
+            attempts: dict[str, int] = {}
+
+            class FakeAudioSplitter:
+                def __init__(self, _config: SplitterConfig) -> None:
+                    return None
+
+                def split_audio(self, _audio_path: Path, output_dir: Path) -> list[AudioChunk]:
+                    first = output_dir / "chunk000.mp3"
+                    second = output_dir / "chunk001.mp3"
+                    first.write_bytes(b"first")
+                    second.write_bytes(b"second")
+                    return [AudioChunk(first, 0, 0, 5), AudioChunk(second, 1, 5, 10)]
+
+            def transcribe_one(audio_path: Path, output_path: Path, _model: str | None, _language: str | None) -> None:
+                attempts[audio_path.name] = attempts.get(audio_path.name, 0) + 1
+                if audio_path.name == "chunk000.mp3" and attempts[audio_path.name] == 1:
+                    try:
+                        raise providers.requests.Timeout("temporary")
+                    except providers.requests.Timeout as exc:
+                        raise ProviderError("temporary") from exc
+                if audio_path.name == "chunk001.mp3":
+                    raise ProviderError("permanent")
+                write_srt(output_path, [providers.Cue(index=1, start_ms=0, end_ms=1000, text="hello")])
+
+            stderr = StringIO()
+            with patch.object(providers, "AudioSplitter", FakeAudioSplitter), patch("sys.stderr", stderr):
+                with patch.object(providers.time, "sleep", lambda _delay: None):
+                    with self.assertRaisesRegex(RuntimeError, "chunk 1"):
+                        transcribe_with_splitter(transcribe_one, audio, output, None, None, SplitterConfig(target_chunk_duration=10, overlap_duration=1))
+
+            self.assertEqual(2, attempts["chunk000.mp3"])
+            self.assertEqual(1, attempts["chunk001.mp3"])
+            self.assertFalse(output.exists())
+            self.assertIn('CHUNK status="FAIL" index="2" total="2"', stderr.getvalue())
 
 
 class VertexGeminiProviderTests(unittest.TestCase):
@@ -99,7 +190,7 @@ class VertexGeminiProviderTests(unittest.TestCase):
 
 class SherpaParakeetProviderTests(unittest.TestCase):
     def test_sherpa_parakeet_provider_is_registered_and_discoverable(self) -> None:
-        provider = get_provider("sherpa-parakeet")
+        provider = providers.SherpaParakeetProvider()
         payload = json.loads(list_providers())
 
         self.assertEqual("sherpa-parakeet", provider.name)
@@ -191,7 +282,7 @@ class SherpaParakeetProviderTests(unittest.TestCase):
         self.assertIn("sherpa-parakeet selected CPU runtime", stderr.getvalue())
 
     def test_sherpa_provider_transcribe_ignores_language_argument(self) -> None:
-        provider = get_provider("sherpa-parakeet")
+        provider = providers.SherpaParakeetProvider()
         with tempfile.TemporaryDirectory() as tmpdir:
             audio = Path(tmpdir) / "audio.mp3"
             output = Path(tmpdir) / "out.srt"

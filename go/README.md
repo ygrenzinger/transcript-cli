@@ -27,11 +27,13 @@ The positional input can be an existing local video path or a supported YouTube 
 
 Progress is emitted to stderr as `PROGRESS` lines with `stage`, `name`, `status`, and contextual fields.
 
+Some providers split long audio internally before transcription. This is provider-owned behavior and is not exposed as a pipeline CLI option. Current defaults: `vertex-gemini` uses 15-minute chunks, `sherpa-parakeet` uses 120-second chunks with 15-second overlap, and `grok`/`voxtral` do not use chunking. Temporary chunks and per-chunk SRT files are removed by the provider after the merged raw SRT is written successfully.
+
 ## Providers
 
 - `voxtral`: default model `voxtral-mini-2602`, requires `MISTRAL_API_KEY`, implemented with direct Mistral HTTP multipart upload.
 - `grok`: default model `grok-transcribe-1`, requires `XAI_API_KEY`, implemented with direct HTTP multipart upload.
 - `vertex-gemini`: models `gemini-2.5-flash` and `gemini-2.5-pro`, requires `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`; API calls are isolated behind a native `VertexClient` adapter.
-- `sherpa-parakeet`: model `parakeet-tdt-0.6b-v3-int8`, no cloud credentials; cache/audio/runtime concerns are isolated behind native provider boundaries.
+- `sherpa-parakeet`: model `parakeet-tdt-0.6b-v3-int8`, no cloud credentials; downloads the model cache automatically and uses `github.com/k2-fsa/sherpa-onnx-go` for local recognition.
 
-The Go CLI no longer shells out to the Python reference providers. Voxtral and Grok are operational native HTTP providers; Vertex Gemini and Sherpa Parakeet require native adapters/runtimes to be injected before use.
+The Go CLI no longer shells out to the Python reference providers. Voxtral and Grok are operational native HTTP providers; Vertex Gemini still requires a native client adapter to be injected before use.
