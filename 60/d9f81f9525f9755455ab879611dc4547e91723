@@ -1,0 +1,39 @@
+python/providers.py
+  s_aeaf6061751ece::t_0d3f5c4122f8b4 671-672,696-700
+  s_aeaf6061751ece::t_2c6cd49f027e81 3
+  s_aeaf6061751ece::t_bc84f33b2c73eb 863
+  s_aeaf6061751ece::t_8c8c1bf8c61116 678-679,684-690
+python/test_providers.py
+  s_aeaf6061751ece::t_016142fd3e7e3e 67-68
+  s_aeaf6061751ece::t_f3eed1ea7efdfd 69
+go/internal/provider/provider.go
+  s_aeaf6061751ece::t_237f4556282a3c 11
+  s_aeaf6061751ece::t_b1df0eaac64569 972-973,975-979
+  s_aeaf6061751ece::t_75ec96e6f689e8 71-72
+  s_aeaf6061751ece::t_2b045af1cc3759 73
+python/audio_splitter.py
+  s_aeaf6061751ece::t_5ee0553fb81f58 185-192
+  s_aeaf6061751ece::t_c65bda162ede7a 5-6
+  s_aeaf6061751ece::t_5c1bcf84ae87d3 124-136,142-145,152,163-168
+go/internal/audio/splitter.go
+  s_aeaf6061751ece::t_a4823d32ced482 15
+  s_aeaf6061751ece::t_d7f19229bf00dd 159-160,165-170,177-179,181,196,206-210,214-227
+go/internal/provider/provider_test.go
+  s_aeaf6061751ece::t_daf5beef570fe6 52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "60d9f81f9525f9755455ab879611dc4547e91723",
+  "prompts": {},
+  "sessions": {
+    "s_aeaf6061751ece": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05ddbb76-c151-40a0-8a94-35ce51ab4fd0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Yannick Grenzinger <yannick.grenzinger@gmail.com>"
+    }
+  }
+}
